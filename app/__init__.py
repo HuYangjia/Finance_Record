@@ -1,0 +1,2 @@
+"""Personal finance ledger application."""
+

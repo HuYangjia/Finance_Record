@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>个人财务账本 - 记账</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260904-4">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <h1>个人财务账本</h1>
+          <p>本地数据库记账</p>
+        </div>
+        <nav class="primary-nav" aria-label="主导航">
+          <a class="nav-link is-active" href="/" aria-current="page">记账</a>
+          <a class="nav-link" href="/overview">概况与查看</a>
+          <a class="nav-link" href="/accounts">账户与流水</a>
+          <a class="nav-link" href="/investments">投资与汇率</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="entry-main">
+      <aside class="quick-entry-panel" aria-labelledby="quick-entry-title">
+        <div class="section-heading">
+          <h2 id="quick-entry-title">常用操作</h2>
+        </div>
+        <div class="quick-action-list">
+          <button class="quick-action" type="button" data-quick-action="octopus-food">八达通餐饮</button>
+          <button class="quick-action" type="button" data-quick-action="wechat-to-octopus">微信转八达通</button>
+          <button class="quick-action" type="button" data-quick-action="alipay-daily-investment">支付宝定投 35</button>
+        </div>
+      </aside>
+
+      <section class="entry-panel" aria-labelledby="entry-title">
+        <div class="section-heading">
+          <h2 id="entry-title">记一笔</h2>
+          <span id="form-status" role="status"></span>
+        </div>
+        <div class="entry-modes" role="tablist" aria-label="记账类型">
+          <button class="entry-mode is-active" type="button" data-mode="expense" aria-pressed="true">支出</button>
+          <button class="entry-mode" type="button" data-mode="transfer" aria-pressed="false">转账 / 换汇</button>
+          <button class="entry-mode" type="button" data-mode="income" aria-pressed="false">入账</button>
+        </div>
+        <div id="account-warning" class="empty-notice" hidden>
+          尚未创建账户。请先直接在 SQLite 数据库的 <code>accounts</code> 表新增账户。
+        </div>
+        <form id="transaction-form">
+          <div class="form-grid">
+            <label>
+              <span>日期</span>
+              <input id="transaction-date" name="transaction_date" type="date" required>
+            </label>
+            <label data-modes="expense">
+              <span>支付账户</span>
+              <select id="source-account" name="source_account_id" required></select>
+            </label>
+            <label data-modes="expense">
+              <span>金额</span>
+              <input id="expense-amount" type="number" min="0.01" step="0.01" inputmode="decimal">
+            </label>
+            <label data-modes="expense">
+              <span>支出分类</span>
+              <select id="expense-category" required></select>
+            </label>
+
+            <label data-modes="transfer">
+              <span>转出账户</span>
+              <select id="transfer-source-account" required></select>
+            </label>
+            <label data-modes="transfer">
+              <span>转入账户</span>
+              <select id="transfer-destination-account" required></select>
+            </label>
+            <label data-modes="transfer">
+              <span>转出金额</span>
+              <input id="transfer-outflow-amount" type="number" min="0.01" step="0.01" inputmode="decimal">
+            </label>
+            <label id="transfer-inflow-field" data-modes="transfer">
+              <span>收到金额</span>
+              <input id="transfer-inflow-amount" type="number" min="0.01" step="0.01" inputmode="decimal">
+            </label>
+
+            <label data-modes="income">
+              <span>到账账户</span>
+              <select id="income-destination-account" required></select>
+            </label>
+            <label data-modes="income">
+              <span>金额</span>
+              <input id="income-amount" type="number" min="0.01" step="0.01" inputmode="decimal">
+            </label>
+            <label data-modes="income">
+              <span>收入分类</span>
+              <select id="income-category" required></select>
+            </label>
+            <label data-modes="expense income">
+              <span id="counterparty-label">商户或对象</span>
+              <input id="counterparty" type="text" maxlength="120">
+            </label>
+            <label class="full-width">
+              <span>备注</span>
+              <textarea id="note" rows="3" maxlength="500"></textarea>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button id="submit-transaction" type="submit">保存支出</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <script src="/static/app.js?v=20260904-4"></script>
+  </body>
+</html>

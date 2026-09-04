@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>个人财务账本 - 投资与汇率</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260904-4">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <h1>个人财务账本</h1>
+          <p>本地数据库记账</p>
+        </div>
+        <nav class="primary-nav" aria-label="主导航">
+          <a class="nav-link" href="/">记账</a>
+          <a class="nav-link" href="/overview">概况与查看</a>
+          <a class="nav-link" href="/accounts">账户与流水</a>
+          <a class="nav-link is-active" href="/investments" aria-current="page">投资与汇率</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="investment-main">
+      <section class="entry-panel" aria-labelledby="valuation-entry-title">
+        <div class="section-heading">
+          <h2 id="valuation-entry-title">录入投资估值</h2>
+          <span id="valuation-status" role="status"></span>
+        </div>
+        <form id="valuation-form">
+          <div class="detail-filter-grid">
+            <label>
+              <span>投资账户</span>
+              <select id="valuation-account" required></select>
+            </label>
+            <label>
+              <span>估值日期</span>
+              <input id="valuation-date" type="date" required>
+            </label>
+            <label>
+              <span>账户总资产</span>
+              <input id="valuation-total-value" type="number" min="0" step="0.01" inputmode="decimal" required>
+            </label>
+            <label class="full-width">
+              <span>备注</span>
+              <textarea id="valuation-note" rows="2" maxlength="500"></textarea>
+            </label>
+          </div>
+          <div class="form-actions detail-filter-actions">
+            <button id="valuation-reset" class="secondary-button" type="button">清空</button>
+            <button type="submit">保存估值</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="ledger-panel" aria-labelledby="valuation-list-title">
+        <div class="section-heading">
+          <h2 id="valuation-list-title">估值记录</h2>
+          <span id="valuation-list-summary"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>账户</th>
+                <th>总资产</th>
+                <th>自动损益</th>
+                <th>备注</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="valuation-list-body">
+              <tr><td colspan="6" class="empty-cell">暂无投资估值</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="transaction-search-panel" aria-labelledby="performance-title">
+        <div class="section-heading">
+          <h2 id="performance-title">区间收益</h2>
+          <span id="performance-status" role="status"></span>
+        </div>
+        <form id="performance-form">
+          <div class="detail-filter-grid">
+            <label>
+              <span>投资账户</span>
+              <select id="performance-account"></select>
+            </label>
+            <label>
+              <span>开始日期</span>
+              <input id="performance-start-date" type="date" required>
+            </label>
+            <label>
+              <span>结束日期</span>
+              <input id="performance-end-date" type="date" required>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="submit">查询收益</button>
+          </div>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>账户</th>
+                <th>期初余额</th>
+                <th>投入</th>
+                <th>取出</th>
+                <th>期末余额</th>
+                <th>区间损益</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody id="performance-body">
+              <tr><td colspan="7" class="empty-cell">请选择日期后查询</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="transaction-search-panel" aria-labelledby="monthly-investment-title">
+        <div class="section-heading">
+          <h2 id="monthly-investment-title">月度投资统计</h2>
+          <span id="monthly-investment-status" role="status"></span>
+        </div>
+        <form id="monthly-investment-form">
+          <div class="detail-filter-grid">
+            <label>
+              <span>投资账户</span>
+              <select id="monthly-investment-account"></select>
+            </label>
+            <label>
+              <span>开始月份</span>
+              <input id="monthly-investment-start" type="month" required>
+            </label>
+            <label>
+              <span>结束月份</span>
+              <input id="monthly-investment-end" type="month" required>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="submit">查询月统计</button>
+          </div>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>月份</th>
+                <th>账户</th>
+                <th>期初余额</th>
+                <th>投入</th>
+                <th>取出</th>
+                <th>期末余额</th>
+                <th>损益</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody id="monthly-investment-body">
+              <tr><td colspan="8" class="empty-cell">请选择月份后查询</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="transaction-search-panel" aria-labelledby="fx-rate-title">
+        <div class="section-heading">
+          <h2 id="fx-rate-title">每日汇率</h2>
+          <div class="account-heading-actions">
+            <span id="fx-status" role="status"></span>
+            <button id="sync-fx-rates" class="secondary-button" type="button">同步今天汇率</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>快照日期</th>
+                <th>USD/CNY</th>
+                <th>HKD/CNY</th>
+                <th>数据源</th>
+                <th>市场日期</th>
+                <th>备注</th>
+              </tr>
+            </thead>
+            <tbody id="fx-rates-body">
+              <tr><td colspan="6" class="empty-cell">暂无汇率快照</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <details class="manual-rate-details">
+          <summary>手工覆盖汇率</summary>
+          <form id="manual-fx-form">
+            <div class="detail-filter-grid">
+              <label>
+                <span>快照日期</span>
+                <input id="manual-fx-date" type="date" required>
+              </label>
+              <label>
+                <span>USD/CNY</span>
+                <input id="manual-usd-cny" type="number" min="0.0001" step="0.0001" inputmode="decimal" required>
+              </label>
+              <label>
+                <span>HKD/CNY</span>
+                <input id="manual-hkd-cny" type="number" min="0.0001" step="0.0001" inputmode="decimal" required>
+              </label>
+              <label class="full-width">
+                <span>覆盖原因</span>
+                <textarea id="manual-fx-note" rows="2" maxlength="500"></textarea>
+              </label>
+            </div>
+            <div class="form-actions">
+              <button type="submit">保存手工汇率</button>
+            </div>
+          </form>
+        </details>
+      </section>
+    </main>
+
+    <script src="/static/investment.js"></script>
+  </body>
+</html>

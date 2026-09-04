@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>个人财务账本 - 概况与查看</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260904-4">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <h1>个人财务账本</h1>
+          <p>本地数据库记账</p>
+        </div>
+        <nav class="primary-nav" aria-label="主导航">
+          <a class="nav-link" href="/">记账</a>
+          <a class="nav-link is-active" href="/overview" aria-current="page">概况与查看</a>
+          <a class="nav-link" href="/accounts">账户与流水</a>
+          <a class="nav-link" href="/investments">投资与汇率</a>
+        </nav>
+        <div class="topbar-actions">
+          <label class="month-control">
+            <span>查看月份</span>
+            <input id="month" type="month">
+          </label>
+          <button id="export-button" type="button">导出 Excel</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="overview-main">
+      <section class="dashboard-section" aria-label="月度概览">
+        <div class="section-heading">
+          <h2>月度概览</h2>
+          <span id="month-label"></span>
+        </div>
+        <div id="overview-status" role="status"></div>
+        <div id="cash-flow" class="metric-grid"></div>
+        <div id="available-cash" class="metric-grid"></div>
+        <div id="net-worth" class="metric-grid"></div>
+      </section>
+
+      <section class="movement-section" aria-labelledby="base-currency-title">
+        <div class="section-heading">
+          <h2 id="base-currency-title">本币总统计</h2>
+          <span id="base-currency-date"></span>
+        </div>
+        <div id="base-currency-totals" class="metric-grid" aria-live="polite">
+          <div class="empty-notice">正在加载本币总统计...</div>
+        </div>
+      </section>
+
+      <section class="movement-section" aria-labelledby="movement-title">
+        <div class="section-heading">
+          <h2 id="movement-title">账户内资金流动</h2>
+          <span id="movement-month-label"></span>
+        </div>
+        <div id="internal-movement-summary" class="metric-grid"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>类型</th>
+                <th>资金路径</th>
+                <th>金额</th>
+                <th>备注</th>
+              </tr>
+            </thead>
+            <tbody id="internal-movements-body">
+              <tr><td colspan="5" class="empty-cell">本月暂无账户内资金流动</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="transactions-panel" aria-labelledby="transactions-title">
+        <div class="section-heading">
+          <h2 id="transactions-title">最近流水</h2>
+          <span>最近 20 笔</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>类型</th>
+                <th>资金路径</th>
+                <th>金额</th>
+                <th>分类</th>
+              </tr>
+            </thead>
+            <tbody id="transactions-body">
+              <tr><td colspan="5" class="empty-cell">暂无流水</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/overview.js?v=20260904-3"></script>
+  </body>
+</html>

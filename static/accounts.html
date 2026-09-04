@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>个人财务账本 - 账户与流水</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260904-4">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <h1>个人财务账本</h1>
+          <p>本地数据库记账</p>
+        </div>
+        <nav class="primary-nav" aria-label="主导航">
+          <a class="nav-link" href="/">记账</a>
+          <a class="nav-link" href="/overview">概况与查看</a>
+          <a class="nav-link is-active" href="/accounts" aria-current="page">账户与流水</a>
+          <a class="nav-link" href="/investments">投资与汇率</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="account-detail-main">
+      <div class="detail-view-modes" role="tablist" aria-label="账户与流水视图">
+        <button class="detail-view-mode is-active" type="button" data-view="account" aria-pressed="true">账户明细</button>
+        <button class="detail-view-mode" type="button" data-view="search" aria-pressed="false">流水查询</button>
+      </div>
+
+      <section class="account-filter-panel" data-detail-view="account" aria-labelledby="account-detail-title">
+        <div class="section-heading">
+          <h2 id="account-detail-title">账户明细</h2>
+          <span id="detail-status" role="status"></span>
+        </div>
+        <form id="detail-filter-form">
+          <div class="detail-filter-grid">
+            <label>
+              <span>账户</span>
+              <select id="detail-account" required></select>
+            </label>
+            <label>
+              <span>开始日期</span>
+              <input id="detail-start-date" type="date">
+            </label>
+            <label>
+              <span>结束日期</span>
+              <input id="detail-end-date" type="date">
+            </label>
+            <label>
+              <span>流水类型</span>
+              <select id="detail-transaction-type">
+                <option value="">全部类型</option>
+                <option value="income">入账</option>
+                <option value="expense">支出</option>
+                <option value="transfer">转账</option>
+                <option value="fx_exchange">换汇</option>
+                <option value="broker_deposit">券商入金</option>
+                <option value="broker_withdrawal">券商出金</option>
+                <option value="adjustment">调整</option>
+              </select>
+            </label>
+            <label>
+              <span>分类</span>
+              <select id="detail-category">
+                <option value="">全部分类</option>
+              </select>
+            </label>
+            <label>
+              <span>对象、分类或备注</span>
+              <input id="detail-keyword" type="search" maxlength="120">
+            </label>
+            <fieldset class="multi-filter compact-filter">
+              <legend>纠错状态</legend>
+              <div class="filter-option-grid">
+                <label><input id="detail-adjustment-only" type="checkbox">仅手工调整</label>
+                <label><input id="detail-flagged-only" type="checkbox">仅待核实</label>
+              </div>
+            </fieldset>
+          </div>
+          <div class="form-actions detail-filter-actions">
+            <button type="submit">筛选</button>
+            <button id="clear-detail-filters" class="secondary-button" type="button">清除筛选</button>
+          </div>
+        </form>
+      </section>
+
+      <div id="detail-account-warning" class="empty-notice" data-detail-view="account" hidden>
+        尚未创建账户。请先直接在 SQLite 数据库的 <code>accounts</code> 表新增账户。
+      </div>
+
+      <section id="account-summary-panel" class="account-summary-panel" data-detail-view="account" hidden>
+          <div class="section-heading">
+            <div>
+              <h2 id="account-name"></h2>
+              <p id="account-meta" class="account-meta"></p>
+            </div>
+          <div class="account-heading-actions">
+            <span id="account-status"></span>
+            <button id="open-adjustment-dialog" class="secondary-button" type="button">对账 / 调整余额</button>
+            <button id="open-opening-balance-dialog" class="secondary-button" type="button">修正期初</button>
+          </div>
+        </div>
+        <p id="account-summary-note" class="account-summary-note" hidden></p>
+        <div id="account-state" class="account-state-grid"></div>
+      </section>
+
+      <section id="ledger-panel" class="ledger-panel" data-detail-view="account" hidden aria-labelledby="ledger-title">
+        <div class="section-heading">
+          <h2 id="ledger-title">账户流水</h2>
+          <span id="ledger-summary"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>类型</th>
+                <th>方向</th>
+                <th>对方账户</th>
+                <th>流入</th>
+                <th>流出</th>
+                <th>该笔后余额</th>
+                <th>用途</th>
+                <th>备注</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="ledger-body">
+              <tr><td colspan="11" class="empty-cell">暂无流水</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pager" aria-label="账户流水分页">
+          <button id="previous-page" class="icon-button" type="button" aria-label="上一页" title="上一页">&#8592;</button>
+          <span id="page-label"></span>
+          <button id="next-page" class="icon-button" type="button" aria-label="下一页" title="下一页">&#8594;</button>
+        </div>
+      </section>
+
+      <section id="transaction-search-panel" class="transaction-search-panel" data-detail-view="search" hidden aria-labelledby="transaction-search-title">
+        <div class="section-heading">
+          <h2 id="transaction-search-title">流水查询</h2>
+          <span id="search-status" role="status"></span>
+        </div>
+        <form id="transaction-search-form">
+          <div class="detail-filter-grid">
+            <label>
+              <span>账户范围</span>
+              <select id="search-account"></select>
+            </label>
+            <label>
+              <span>开始日期</span>
+              <input id="search-start-date" type="date">
+            </label>
+            <label>
+              <span>结束日期</span>
+              <input id="search-end-date" type="date">
+            </label>
+            <fieldset class="multi-filter">
+              <legend>流水类型</legend>
+              <div id="search-type-options" class="filter-option-grid">
+                <label><input type="checkbox" value="income">入账</label>
+                <label><input type="checkbox" value="expense">支出</label>
+                <label><input type="checkbox" value="transfer">转账</label>
+                <label><input type="checkbox" value="fx_exchange">换汇</label>
+                <label><input type="checkbox" value="broker_deposit">券商入金</label>
+                <label><input type="checkbox" value="broker_withdrawal">券商出金</label>
+                <label><input type="checkbox" value="adjustment">调整</label>
+              </div>
+            </fieldset>
+            <fieldset class="multi-filter compact-filter">
+              <legend>纠错状态</legend>
+              <div class="filter-option-grid">
+                <label><input id="search-adjustment-only" type="checkbox">仅手工调整</label>
+                <label><input id="search-flagged-only" type="checkbox">仅待核实</label>
+              </div>
+            </fieldset>
+            <details class="multi-select" id="search-category-select">
+              <summary><span>分类</span><strong id="search-category-summary">全部分类</strong></summary>
+              <div id="search-category-options" class="filter-option-list"></div>
+            </details>
+            <label>
+              <span>对象、分类或备注</span>
+              <input id="search-keyword" type="search" maxlength="120">
+            </label>
+          </div>
+          <div class="form-actions detail-filter-actions">
+            <button type="submit">查询</button>
+            <button id="clear-search-filters" class="secondary-button" type="button">清除筛选</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="search-results-panel" class="ledger-panel" data-detail-view="search" hidden aria-labelledby="search-results-title">
+        <div class="section-heading">
+          <h2 id="search-results-title">查询结果</h2>
+          <span id="search-summary"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>类型</th>
+                <th>资金路径</th>
+                <th>转出</th>
+                <th>转入</th>
+                <th>用途</th>
+                <th>备注</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="search-results-body">
+              <tr><td colspan="9" class="empty-cell">暂无流水</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pager" aria-label="查询结果分页">
+          <button id="previous-search-page" class="icon-button" type="button" aria-label="上一页" title="上一页">&#8592;</button>
+          <span id="search-page-label"></span>
+          <button id="next-search-page" class="icon-button" type="button" aria-label="下一页" title="下一页">&#8594;</button>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="transaction-editor-dialog" class="app-dialog">
+      <form id="transaction-editor-form" method="dialog">
+        <div class="dialog-heading">
+          <h2>修改流水</h2>
+          <button class="icon-button dialog-close" type="button" data-close-dialog="transaction-editor-dialog" aria-label="关闭" title="关闭">&#215;</button>
+        </div>
+        <input id="editor-transaction-id" type="hidden">
+        <div class="detail-filter-grid">
+          <label>
+            <span>日期</span>
+            <input id="editor-transaction-date" type="date" required>
+          </label>
+          <label>
+            <span>流水类型</span>
+            <select id="editor-transaction-type" required>
+              <option value="income">入账</option>
+              <option value="expense">支出</option>
+              <option value="transfer">转账</option>
+              <option value="fx_exchange">换汇</option>
+              <option value="broker_deposit">券商入金</option>
+              <option value="broker_withdrawal">券商出金</option>
+              <option value="adjustment">调整</option>
+            </select>
+          </label>
+          <label>
+            <span>来源账户</span>
+            <select id="editor-source-account"></select>
+          </label>
+          <label>
+            <span>去向账户</span>
+            <select id="editor-destination-account"></select>
+          </label>
+          <label>
+            <span>流出金额</span>
+            <input id="editor-outflow-amount" type="number" min="0.01" step="0.01" inputmode="decimal">
+          </label>
+          <label>
+            <span>流入金额</span>
+            <input id="editor-inflow-amount" type="number" min="0.01" step="0.01" inputmode="decimal">
+          </label>
+          <label>
+            <span>分类</span>
+            <select id="editor-category"></select>
+          </label>
+          <label>
+            <span>对象</span>
+            <input id="editor-counterparty" type="text" maxlength="120">
+          </label>
+          <label class="full-width">
+            <span>备注</span>
+            <textarea id="editor-note" rows="3" maxlength="500"></textarea>
+          </label>
+          <label class="full-width">
+            <span>修改说明</span>
+            <textarea id="editor-correction-reason" rows="2" maxlength="500"></textarea>
+          </label>
+        </div>
+        <p id="editor-status" class="dialog-status" role="status"></p>
+        <div class="form-actions detail-filter-actions">
+          <button class="secondary-button" type="button" data-close-dialog="transaction-editor-dialog">取消</button>
+          <button type="submit">保存修改</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="transaction-delete-dialog" class="app-dialog">
+      <form id="transaction-delete-form" method="dialog">
+        <div class="dialog-heading">
+          <h2>删除流水</h2>
+          <button class="icon-button dialog-close" type="button" data-close-dialog="transaction-delete-dialog" aria-label="关闭" title="关闭">&#215;</button>
+        </div>
+        <input id="delete-transaction-id" type="hidden">
+        <p id="delete-transaction-summary" class="dialog-copy"></p>
+        <label>
+          <span>删除原因</span>
+          <textarea id="delete-reason" rows="3" maxlength="500" required></textarea>
+        </label>
+        <p id="delete-status" class="dialog-status" role="status"></p>
+        <div class="form-actions detail-filter-actions">
+          <button class="secondary-button" type="button" data-close-dialog="transaction-delete-dialog">取消</button>
+          <button class="danger-button" type="submit">确认删除</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="transaction-flag-dialog" class="app-dialog">
+      <form id="transaction-flag-form" method="dialog">
+        <div class="dialog-heading">
+          <h2>标记待核实</h2>
+          <button class="icon-button dialog-close" type="button" data-close-dialog="transaction-flag-dialog" aria-label="关闭" title="关闭">&#215;</button>
+        </div>
+        <input id="flag-transaction-id" type="hidden">
+        <label>
+          <span>异常类型</span>
+          <select id="flag-type" required>
+            <option value="suspected_duplicate">疑似重复</option>
+            <option value="missing_information">信息不完整</option>
+            <option value="suspicious_amount">金额异常</option>
+            <option value="other">其他待核实</option>
+          </select>
+        </label>
+        <label>
+          <span>说明</span>
+          <textarea id="flag-note" rows="3" maxlength="500" required></textarea>
+        </label>
+        <p id="flag-status" class="dialog-status" role="status"></p>
+        <div class="form-actions detail-filter-actions">
+          <button class="secondary-button" type="button" data-close-dialog="transaction-flag-dialog">取消</button>
+          <button type="submit">保存标记</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="adjustment-dialog" class="app-dialog">
+      <form id="adjustment-form" method="dialog">
+        <div class="dialog-heading">
+          <h2>对账 / 调整余额</h2>
+          <button class="icon-button dialog-close" type="button" data-close-dialog="adjustment-dialog" aria-label="关闭" title="关闭">&#215;</button>
+        </div>
+        <input id="adjustment-account-id" type="hidden">
+        <p id="adjustment-account-summary" class="dialog-copy"></p>
+        <div class="detail-filter-grid">
+          <label>
+            <span>对账日期</span>
+            <input id="adjustment-date" type="date" required>
+          </label>
+          <label>
+            <span>实际余额</span>
+            <input id="adjustment-actual-balance" type="number" min="0" step="0.01" inputmode="decimal" required>
+          </label>
+        </div>
+        <p id="adjustment-preview" class="dialog-copy"></p>
+        <p id="adjustment-warning" class="dialog-warning" hidden></p>
+        <label>
+          <span>调整原因</span>
+          <textarea id="adjustment-reason" rows="2" maxlength="350" required></textarea>
+        </label>
+        <label>
+          <span>补充备注</span>
+          <textarea id="adjustment-note" rows="2" maxlength="500"></textarea>
+        </label>
+        <p id="adjustment-status" class="dialog-status" role="status"></p>
+        <div class="form-actions detail-filter-actions">
+          <button class="secondary-button" type="button" data-close-dialog="adjustment-dialog">取消</button>
+          <button type="submit">保存对账结果</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="opening-balance-dialog" class="app-dialog">
+      <form id="opening-balance-form" method="dialog">
+        <div class="dialog-heading">
+          <h2>修正期初余额</h2>
+          <button class="icon-button dialog-close" type="button" data-close-dialog="opening-balance-dialog" aria-label="关闭" title="关闭">&#215;</button>
+        </div>
+        <input id="opening-balance-account-id" type="hidden">
+        <p id="opening-balance-summary" class="dialog-copy"></p>
+        <div class="detail-filter-grid">
+          <label>
+            <span>期初日期</span>
+            <input id="opening-balance-date" type="date" required>
+          </label>
+          <label>
+            <span>新期初余额</span>
+            <input id="opening-balance-value" type="number" min="0" step="0.01" inputmode="decimal" required>
+          </label>
+        </div>
+        <label>
+          <span>修正原因</span>
+          <textarea id="opening-balance-reason" rows="3" maxlength="500" required></textarea>
+        </label>
+        <p id="opening-balance-status" class="dialog-status" role="status"></p>
+        <div class="form-actions detail-filter-actions">
+          <button class="secondary-button" type="button" data-close-dialog="opening-balance-dialog">取消</button>
+          <button type="submit">保存期初修正</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/static/accounts.js"></script>
+  </body>
+</html>
