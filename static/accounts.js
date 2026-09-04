@@ -46,6 +46,10 @@ const searchCategorySummary = document.querySelector("#search-category-summary")
 const searchStatus = document.querySelector("#search-status");
 const previousSearchPageButton = document.querySelector("#previous-search-page");
 const nextSearchPageButton = document.querySelector("#next-search-page");
+const transactionAnalysisPanel = document.querySelector("#transaction-analysis-panel");
+const analysisStatus = document.querySelector("#analysis-status");
+const analysisConstraint = document.querySelector("#analysis-constraint");
+const analysisContent = document.querySelector("#analysis-content");
 
 const editorDialog = document.querySelector("#transaction-editor-dialog");
 const editorForm = document.querySelector("#transaction-editor-form");
@@ -178,6 +182,7 @@ function updateViewVisibility() {
   ledgerPanel.hidden = !showingAccount || !state.detail.loaded;
   searchPanel.hidden = showingAccount;
   searchResultsPanel.hidden = showingAccount || !state.search.loaded;
+  transactionAnalysisPanel.hidden = showingAccount || !state.search.loaded;
 }
 
 async function setView(view) {
@@ -488,6 +493,355 @@ function updateSearchPagination(pagination) {
   nextSearchPageButton.disabled = pagination.offset + pagination.limit >= pagination.total;
 }
 
+function analysisConstraintMessage() {
+  const selectedTypes = selectedSearchTypes();
+  if (!searchStartDateInput.value || !searchEndDateInput.value) {
+    return "请选择完整的开始日期和结束日期后生成流水详情。";
+  }
+  if (searchStartDateInput.value > searchEndDateInput.value) {
+    return "开始日期不能晚于结束日期。";
+  }
+  const start = new Date(`${searchStartDateInput.value}T00:00:00`);
+  const end = new Date(`${searchEndDateInput.value}T00:00:00`);
+  const monthCount =
+    (end.getFullYear() - start.getFullYear()) * 12
+    + end.getMonth()
+    - start.getMonth()
+    + 1;
+  if (monthCount > 12) {
+    return "流水详情最多统计 12 个自然月，请拆分日期范围。";
+  }
+  if (selectedTypes.length !== 1) {
+    return "请选择唯一一种流水类型后生成流水详情。";
+  }
+  return "";
+}
+
+function buildAnalysisPath() {
+  const parameters = new URLSearchParams({
+    start_date: searchStartDateInput.value,
+    end_date: searchEndDateInput.value,
+    transaction_type: selectedSearchTypes()[0],
+  });
+  if (searchAccountSelect.value) {
+    parameters.set("account_id", searchAccountSelect.value);
+  }
+  for (const categoryId of selectedSearchCategories()) {
+    parameters.append("category_ids", categoryId);
+  }
+  if (searchKeywordInput.value.trim()) {
+    parameters.set("keyword", searchKeywordInput.value.trim());
+  }
+  if (searchAdjustmentOnlyInput.checked) {
+    parameters.set("manual_adjustments_only", "true");
+  }
+  if (searchFlaggedOnlyInput.checked) {
+    parameters.set("flagged_only", "true");
+  }
+  return `/api/transactions/analysis?${parameters.toString()}`;
+}
+
+function createAnalysisBlock(title) {
+  const block = document.createElement("section");
+  block.className = "analysis-block";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  block.append(heading);
+  return block;
+}
+
+function createAnalysisMetric(labelText, valueText, primary = false) {
+  const item = document.createElement("article");
+  item.className = "account-state-item";
+  if (primary) {
+    item.classList.add("is-primary");
+  }
+  const label = document.createElement("span");
+  const value = document.createElement("strong");
+  label.textContent = labelText;
+  value.textContent = valueText;
+  item.append(label, value);
+  return item;
+}
+
+function createAnalysisSummary(text) {
+  const summary = document.createElement("p");
+  summary.className = "analysis-summary";
+  summary.textContent = text;
+  return summary;
+}
+
+function monthRange(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  const months = [];
+  let year = start.getFullYear();
+  let month = start.getMonth();
+  while (year < end.getFullYear() || (year === end.getFullYear() && month <= end.getMonth())) {
+    months.push({ year, month });
+    month += 1;
+    if (month === 12) {
+      year += 1;
+      month = 0;
+    }
+  }
+  return months;
+}
+
+function isoDate(year, month, day) {
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function renderAnalysisCalendar(data) {
+  const block = createAnalysisBlock("按日历查看");
+  block.append(createAnalysisSummary(
+    `按${data.main_amount_label}汇总，金额已统一换算为 HKD；点击有金额的日期可查看当天逐笔流水。`,
+  ));
+  const dayTotals = new Map(
+    data.daily_totals.map((item) => [item.transaction_date, item]),
+  );
+  const months = document.createElement("div");
+  months.className = "analysis-calendar-months";
+  for (const month of monthRange(data.filters.start_date, data.filters.end_date)) {
+    const monthElement = document.createElement("section");
+    monthElement.className = "analysis-calendar-month";
+    const heading = document.createElement("h4");
+    heading.textContent = `${month.year} 年 ${month.month + 1} 月`;
+    const grid = document.createElement("div");
+    grid.className = "analysis-calendar-grid";
+    for (const label of ["一", "二", "三", "四", "五", "六", "日"]) {
+      const weekday = document.createElement("div");
+      weekday.className = "analysis-calendar-weekday";
+      weekday.textContent = label;
+      grid.append(weekday);
+    }
+
+    const firstWeekday = (new Date(month.year, month.month, 1).getDay() + 6) % 7;
+    const daysInMonth = new Date(month.year, month.month + 1, 0).getDate();
+    for (let index = 0; index < firstWeekday; index += 1) {
+      const blank = document.createElement("div");
+      blank.className = "analysis-calendar-day is-outside-range";
+      blank.setAttribute("aria-hidden", "true");
+      grid.append(blank);
+    }
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const dateValue = isoDate(month.year, month.month, day);
+      const daily = dayTotals.get(dateValue);
+      const inRange =
+        dateValue >= data.filters.start_date && dateValue <= data.filters.end_date;
+      const cell = document.createElement(daily && inRange ? "button" : "div");
+      cell.className = "analysis-calendar-day";
+      if (!inRange) {
+        cell.classList.add("is-outside-range");
+      }
+      const dateLabel = document.createElement("span");
+      dateLabel.textContent = String(day);
+      cell.append(dateLabel);
+      if (daily && inRange) {
+        cell.type = "button";
+        cell.title = `${dateValue}：${daily.amount} HKD，${daily.count} 笔`;
+        const amount = document.createElement("strong");
+        amount.textContent = `${daily.amount} HKD`;
+        const count = document.createElement("small");
+        count.textContent = `${daily.count} 笔`;
+        cell.append(amount, count);
+        cell.addEventListener("click", () => {
+          searchStartDateInput.value = dateValue;
+          searchEndDateInput.value = dateValue;
+          loadSearch(true)
+            .then(() => searchResultsPanel.scrollIntoView({ behavior: "smooth", block: "start" }))
+            .catch((error) => setStatus(searchStatus, error.message, "error"));
+        });
+      }
+      grid.append(cell);
+    }
+    const trailingDays = (firstWeekday + daysInMonth) % 7;
+    if (trailingDays) {
+      for (let index = trailingDays; index < 7; index += 1) {
+        const blank = document.createElement("div");
+        blank.className = "analysis-calendar-day is-outside-range";
+        blank.setAttribute("aria-hidden", "true");
+        grid.append(blank);
+      }
+    }
+    monthElement.append(heading, grid);
+    months.append(monthElement);
+  }
+  block.append(months);
+  return block;
+}
+
+function renderHistogram(data) {
+  const block = createAnalysisBlock("单笔金额分布");
+  block.append(createAnalysisSummary(`单位：HKD；按${data.main_amount_label}的单笔金额自动分箱。`));
+  const histogram = document.createElement("div");
+  histogram.className = "analysis-histogram";
+  const highestCount = Math.max(...data.histogram.map((item) => item.count), 1);
+  for (const bin of data.histogram) {
+    const item = document.createElement("div");
+    item.className = "analysis-histogram-bin";
+    item.title = `${bin.start}-${bin.end} HKD：${bin.count} 笔`;
+    const count = document.createElement("strong");
+    count.textContent = `${bin.count} 笔`;
+    const barArea = document.createElement("div");
+    barArea.className = "analysis-histogram-bar-area";
+    const bar = document.createElement("div");
+    bar.className = "analysis-histogram-bar";
+    bar.style.height = `${Math.max(6, (bin.count / highestCount) * 100)}%`;
+    const label = document.createElement("span");
+    label.textContent = bin.start === bin.end
+      ? `${bin.start} HKD`
+      : `${bin.start}-${bin.end}`;
+    barArea.append(bar);
+    item.append(count, barArea, label);
+    histogram.append(item);
+  }
+  block.append(histogram);
+  return block;
+}
+
+function renderWeekdayDistribution(data) {
+  const block = createAnalysisBlock("星期分布");
+  block.append(createAnalysisSummary("按流水日期归集，金额单位为 HKD。"));
+  const grid = document.createElement("div");
+  grid.className = "analysis-weekday-grid";
+  for (const item of data.weekday_distribution) {
+    const weekday = document.createElement("div");
+    weekday.className = "analysis-weekday-item";
+    const label = document.createElement("span");
+    const amount = document.createElement("strong");
+    const count = document.createElement("span");
+    label.textContent = item.label;
+    amount.textContent = `${item.amount} HKD`;
+    count.textContent = `${item.count} 笔`;
+    weekday.append(label, amount, count);
+    grid.append(weekday);
+  }
+  block.append(grid);
+  return block;
+}
+
+function createDistributionTable(title, records, amountLabel) {
+  if (records.length <= 1) {
+    return null;
+  }
+  const section = document.createElement("section");
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const value of ["项目", amountLabel, "笔数"]) {
+    const cell = document.createElement("th");
+    cell.textContent = value;
+    headRow.append(cell);
+  }
+  head.append(headRow);
+  const body = document.createElement("tbody");
+  for (const record of records) {
+    const row = document.createElement("tr");
+    appendCells(row, [record.name, `${record.amount} HKD`, `${record.count}`]);
+    body.append(row);
+  }
+  table.append(head, body);
+  section.append(heading, table);
+  return section;
+}
+
+function renderTransactionAnalysis(data) {
+  analysisContent.replaceChildren();
+  analysisConstraint.hidden = true;
+
+  const coverage = data.rate_coverage;
+  const coverageParts = [
+    `符合条件 ${data.matched_transaction_count} 笔`,
+    `原币 HKD ${coverage.direct_hkd_count} 笔`,
+    `当天汇率换算 ${coverage.exact_rate_count} 笔`,
+    `邻近日期汇率换算 ${coverage.nearest_rate_count} 笔`,
+  ];
+  if (coverage.excluded_count) {
+    const missing = coverage.missing_currencies.length
+      ? `（${coverage.missing_currencies.join("、")}）`
+      : "";
+    coverageParts.push(`未纳入 ${coverage.excluded_count} 笔${missing}`);
+  }
+
+  if (!data.statistics) {
+    const empty = document.createElement("div");
+    empty.className = "empty-notice";
+    empty.textContent =
+      `${coverageParts.join("；")}。没有可换算为 HKD 的流水，因此无法生成日历和统计。`;
+    analysisContent.append(empty);
+    analysisContent.hidden = false;
+    return;
+  }
+
+  const statistics = data.statistics;
+  const statisticsBlock = createAnalysisBlock("核心统计");
+  statisticsBlock.append(createAnalysisSummary(
+    `${data.transaction_type_label} · ${data.main_amount_label} · ${coverageParts.join("；")}。`,
+  ));
+  const metricGrid = document.createElement("div");
+  metricGrid.className = "account-state-grid";
+  const metrics = [
+    { label: "总金额", value: `${statistics.total_amount} HKD`, primary: true },
+    { label: "纳入统计笔数", value: `${statistics.transaction_count} 笔` },
+    { label: "有流水天数", value: `${statistics.active_day_count} / ${statistics.range_day_count} 天` },
+    { label: "单笔均值", value: `${statistics.mean_amount} HKD` },
+    { label: "中位数", value: `${statistics.median_amount} HKD` },
+    { label: "最小 / 最大", value: `${statistics.minimum_amount} / ${statistics.maximum_amount} HKD` },
+    { label: "总体标准差", value: `${statistics.population_standard_deviation} HKD` },
+    { label: "总体方差", value: `${statistics.population_variance} HKD^2` },
+    { label: "最高金额日", value: `${statistics.maximum_day_date} · ${statistics.maximum_day_amount} HKD` },
+  ];
+  for (const metric of metrics) {
+    metricGrid.append(createAnalysisMetric(metric.label, metric.value, metric.primary));
+  }
+  statisticsBlock.append(metricGrid);
+  analysisContent.append(statisticsBlock, renderAnalysisCalendar(data), renderHistogram(data), renderWeekdayDistribution(data));
+
+  const distributions = document.createElement("section");
+  distributions.className = "analysis-block";
+  const distributionGrid = document.createElement("div");
+  distributionGrid.className = "analysis-distribution-grid";
+  const distributionSections = [
+    createDistributionTable("分类分布", data.category_distribution, "金额"),
+    createDistributionTable(`${data.account_label}分布`, data.account_distribution, "金额"),
+    createDistributionTable("调整方向分布", data.direction_distribution, "金额"),
+  ].filter(Boolean);
+  for (const section of distributionSections) {
+    distributionGrid.append(section);
+  }
+  if (distributionSections.length) {
+    distributions.append(distributionGrid);
+    analysisContent.append(distributions);
+  }
+  analysisContent.hidden = false;
+}
+
+async function loadTransactionAnalysis() {
+  analysisContent.replaceChildren();
+  analysisContent.hidden = true;
+  setStatus(analysisStatus, "");
+  const constraint = analysisConstraintMessage();
+  if (constraint) {
+    analysisConstraint.textContent = constraint;
+    analysisConstraint.hidden = false;
+    return;
+  }
+
+  analysisConstraint.hidden = true;
+  try {
+    const data = await request(buildAnalysisPath());
+    renderTransactionAnalysis(data);
+    setStatus(analysisStatus, "已按 HKD 统计", "success");
+  } catch (error) {
+    analysisConstraint.textContent = error.message;
+    analysisConstraint.hidden = false;
+    setStatus(analysisStatus, "", "");
+  }
+}
+
 async function loadSearch(resetPage = false) {
   if (resetPage) {
     state.search.offset = 0;
@@ -498,6 +852,7 @@ async function loadSearch(resetPage = false) {
   updateSearchPagination(data.pagination);
   state.search.loaded = true;
   updateViewVisibility();
+  await loadTransactionAnalysis();
 }
 
 function renderSearchCategoryOptions(categories) {

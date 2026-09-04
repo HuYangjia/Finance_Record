@@ -31,6 +31,25 @@ TRANSACTION_TYPE_LABELS = {
     "broker_withdrawal": "券商出金",
     "adjustment": "调整",
 }
+TRANSACTION_ANALYSIS_AMOUNT_LABELS = {
+    "expense": "支出金额",
+    "income": "入账金额",
+    "transfer": "转出金额",
+    "fx_exchange": "转出金额",
+    "broker_deposit": "转出金额",
+    "broker_withdrawal": "转出金额",
+    "adjustment": "调整金额",
+}
+TRANSACTION_ANALYSIS_ACCOUNT_LABELS = {
+    "expense": "支付账户",
+    "income": "到账账户",
+    "transfer": "转出账户",
+    "fx_exchange": "转出账户",
+    "broker_deposit": "转出账户",
+    "broker_withdrawal": "转出账户",
+    "adjustment": "调整账户",
+}
+WEEKDAY_LABELS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 FLAG_TYPE_LABELS = {
     "suspected_duplicate": "疑似重复",
     "missing_information": "信息不完整",
@@ -2765,6 +2784,421 @@ def search_transactions(
         },
         "transactions": transactions,
     }
+
+
+def analysis_calendar_month_count(start_date: str, end_date: str) -> int:
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    return (end.year - start.year) * 12 + end.month - start.month + 1
+
+
+def analysis_main_amount(row) -> dict[str, Any]:
+    transaction_type = row["transaction_type"]
+    if transaction_type == "income" or (
+        transaction_type == "adjustment" and row["inflow_minor"] is not None
+    ):
+        return {
+            "amount": amount_from_minor(
+                row["inflow_minor"],
+                row["destination_decimal_places"],
+            ),
+            "currency_code": row["destination_currency_code"],
+            "account_name": row["destination_account_name"] or "外部",
+            "direction": "调增" if transaction_type == "adjustment" else None,
+        }
+    return {
+        "amount": amount_from_minor(
+            row["outflow_minor"],
+            row["source_decimal_places"],
+        ),
+        "currency_code": row["source_currency_code"],
+        "account_name": row["source_account_name"] or "外部",
+        "direction": "调减" if transaction_type == "adjustment" else None,
+    }
+
+
+def nearest_cny_exchange_rate(
+    rate_rows,
+    transaction_date: str,
+):
+    target_date = date.fromisoformat(transaction_date)
+    return min(
+        rate_rows,
+        key=lambda row: (
+            abs((date.fromisoformat(row["rate_date"]) - target_date).days),
+            0 if row["rate_date"] <= transaction_date else 1,
+        ),
+    )
+
+
+def amount_to_hkd(
+    amount: Decimal,
+    currency_code: str,
+    transaction_date: str,
+    rate_rows,
+) -> tuple[Decimal | None, str | None]:
+    if currency_code == "HKD":
+        return amount, "direct"
+    if currency_code not in {"CNY", "USD"} or not rate_rows:
+        return None, None
+    rate = nearest_cny_exchange_rate(rate_rows, transaction_date)
+    try:
+        hkd_cny_rate = Decimal(rate["hkd_cny_rate"])
+        usd_cny_rate = Decimal(rate["usd_cny_rate"])
+    except InvalidOperation:
+        return None, None
+    if hkd_cny_rate <= 0 or usd_cny_rate <= 0:
+        return None, None
+    if currency_code == "CNY":
+        converted = amount / hkd_cny_rate
+    else:
+        converted = amount * usd_cny_rate / hkd_cny_rate
+    return converted, "exact" if rate["rate_date"] == transaction_date else "nearest"
+
+
+def build_hkd_histogram(amounts: list[Decimal]) -> list[dict[str, Any]]:
+    if not amounts:
+        return []
+    minimum = min(amounts)
+    maximum = max(amounts)
+    if minimum == maximum:
+        return [
+            {
+                "start": format_decimal(minimum, 2),
+                "end": format_decimal(maximum, 2),
+                "count": len(amounts),
+            }
+        ]
+
+    bin_count = min(8, max(2, round(len(amounts) ** 0.5)))
+    interval = (maximum - minimum) / Decimal(bin_count)
+    counts = [0] * bin_count
+    for amount in amounts:
+        index = min(int((amount - minimum) / interval), bin_count - 1)
+        counts[index] += 1
+    return [
+        {
+            "start": format_decimal(minimum + interval * index, 2),
+            "end": format_decimal(
+                maximum if index == bin_count - 1 else minimum + interval * (index + 1),
+                2,
+            ),
+            "count": counts[index],
+        }
+        for index in range(bin_count)
+    ]
+
+
+def build_transaction_analysis(
+    rows,
+    rate_rows,
+    start_date: str,
+    end_date: str,
+    transaction_type: str,
+) -> dict[str, Any]:
+    converted_records = []
+    rate_coverage = {
+        "direct_hkd_count": 0,
+        "exact_rate_count": 0,
+        "nearest_rate_count": 0,
+        "excluded_count": 0,
+        "missing_currencies": set(),
+    }
+
+    for row in rows:
+        main_amount = analysis_main_amount(row)
+        amount_hkd, rate_status = amount_to_hkd(
+            main_amount["amount"],
+            main_amount["currency_code"],
+            row["transaction_date"],
+            rate_rows,
+        )
+        if amount_hkd is None:
+            rate_coverage["excluded_count"] += 1
+            rate_coverage["missing_currencies"].add(main_amount["currency_code"])
+            continue
+        if rate_status == "direct":
+            rate_coverage["direct_hkd_count"] += 1
+        elif rate_status == "exact":
+            rate_coverage["exact_rate_count"] += 1
+        else:
+            rate_coverage["nearest_rate_count"] += 1
+        converted_records.append(
+            {
+                "transaction_date": row["transaction_date"],
+                "amount_hkd": amount_hkd,
+                "category_name": row["category_name"] or "未分类",
+                "account_name": main_amount["account_name"],
+                "direction": main_amount["direction"],
+            }
+        )
+
+    daily_totals: dict[str, dict[str, Any]] = {}
+    category_totals: dict[str, dict[str, Any]] = {}
+    account_totals: dict[str, dict[str, Any]] = {}
+    weekday_totals = [
+        {"weekday": index, "label": label, "amount": Decimal(0), "count": 0}
+        for index, label in enumerate(WEEKDAY_LABELS)
+    ]
+    direction_totals: dict[str, dict[str, Any]] = {}
+    for record in converted_records:
+        day = daily_totals.setdefault(
+            record["transaction_date"],
+            {"amount": Decimal(0), "count": 0},
+        )
+        day["amount"] += record["amount_hkd"]
+        day["count"] += 1
+
+        category = category_totals.setdefault(
+            record["category_name"],
+            {"amount": Decimal(0), "count": 0},
+        )
+        category["amount"] += record["amount_hkd"]
+        category["count"] += 1
+
+        account = account_totals.setdefault(
+            record["account_name"],
+            {"amount": Decimal(0), "count": 0},
+        )
+        account["amount"] += record["amount_hkd"]
+        account["count"] += 1
+
+        weekday = weekday_totals[
+            date.fromisoformat(record["transaction_date"]).weekday()
+        ]
+        weekday["amount"] += record["amount_hkd"]
+        weekday["count"] += 1
+
+        if record["direction"]:
+            direction = direction_totals.setdefault(
+                record["direction"],
+                {"amount": Decimal(0), "count": 0},
+            )
+            direction["amount"] += record["amount_hkd"]
+            direction["count"] += 1
+
+    amounts = [record["amount_hkd"] for record in converted_records]
+    statistics = None
+    if amounts:
+        total = sum(amounts, Decimal(0))
+        count = len(amounts)
+        mean = total / count
+        sorted_amounts = sorted(amounts)
+        middle = count // 2
+        median = (
+            sorted_amounts[middle]
+            if count % 2
+            else (sorted_amounts[middle - 1] + sorted_amounts[middle]) / 2
+        )
+        variance = sum(
+            ((amount - mean) ** 2 for amount in amounts),
+            Decimal(0),
+        ) / count
+        maximum_day_date, maximum_day = max(
+            daily_totals.items(),
+            key=lambda item: (item[1]["amount"], item[0]),
+        )
+        range_day_count = (
+            date.fromisoformat(end_date) - date.fromisoformat(start_date)
+        ).days + 1
+        statistics = {
+            "total_amount": format_decimal(total, 2),
+            "transaction_count": count,
+            "active_day_count": len(daily_totals),
+            "range_day_count": range_day_count,
+            "mean_amount": format_decimal(mean, 2),
+            "median_amount": format_decimal(median, 2),
+            "minimum_amount": format_decimal(min(amounts), 2),
+            "maximum_amount": format_decimal(max(amounts), 2),
+            "population_variance": format_decimal(variance, 4),
+            "population_standard_deviation": format_decimal(variance.sqrt(), 2),
+            "maximum_day_date": maximum_day_date,
+            "maximum_day_amount": format_decimal(maximum_day["amount"], 2),
+        }
+
+    def serialize_distribution(items: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": name,
+                "amount": format_decimal(values["amount"], 2),
+                "count": values["count"],
+            }
+            for name, values in sorted(
+                items.items(),
+                key=lambda item: (-item[1]["amount"], item[0]),
+            )
+        ]
+
+    return {
+        "transaction_type": transaction_type,
+        "transaction_type_label": TRANSACTION_TYPE_LABELS[transaction_type],
+        "main_amount_label": TRANSACTION_ANALYSIS_AMOUNT_LABELS[transaction_type],
+        "account_label": TRANSACTION_ANALYSIS_ACCOUNT_LABELS[transaction_type],
+        "currency_code": "HKD",
+        "matched_transaction_count": len(rows),
+        "rate_coverage": {
+            "direct_hkd_count": rate_coverage["direct_hkd_count"],
+            "exact_rate_count": rate_coverage["exact_rate_count"],
+            "nearest_rate_count": rate_coverage["nearest_rate_count"],
+            "excluded_count": rate_coverage["excluded_count"],
+            "missing_currencies": sorted(rate_coverage["missing_currencies"]),
+        },
+        "daily_totals": [
+            {
+                "transaction_date": transaction_date,
+                "amount": format_decimal(values["amount"], 2),
+                "count": values["count"],
+            }
+            for transaction_date, values in sorted(daily_totals.items())
+        ],
+        "statistics": statistics,
+        "histogram": build_hkd_histogram(amounts),
+        "weekday_distribution": [
+            {
+                "weekday": item["weekday"],
+                "label": item["label"],
+                "amount": format_decimal(item["amount"], 2),
+                "count": item["count"],
+            }
+            for item in weekday_totals
+        ],
+        "category_distribution": serialize_distribution(category_totals),
+        "account_distribution": serialize_distribution(account_totals),
+        "direction_distribution": serialize_distribution(direction_totals),
+    }
+
+
+@app.get("/api/transactions/analysis")
+def transaction_analysis(
+    transaction_type: str,
+    start_date: str,
+    end_date: str,
+    account_id: int | None = None,
+    category_ids: list[int] = Query(default=[]),
+    keyword: str | None = None,
+    manual_adjustments_only: bool = False,
+    flagged_only: bool = False,
+):
+    start_date = validate_optional_date(start_date, "开始日期")
+    end_date = validate_optional_date(end_date, "结束日期")
+    if start_date is None or end_date is None:
+        raise HTTPException(status_code=422, detail="流水详情需要完整的开始日期和结束日期。")
+    if start_date > end_date:
+        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期。")
+    if analysis_calendar_month_count(start_date, end_date) > 12:
+        raise HTTPException(status_code=422, detail="流水详情最多统计 12 个自然月，请拆分查询。")
+    if transaction_type not in TRANSACTION_TYPE_LABELS:
+        raise HTTPException(status_code=422, detail="流水类型不支持。")
+    if not isinstance(category_ids, list):
+        category_ids = []
+    category_ids = list(dict.fromkeys(category_ids))
+    if any(category_id < 1 for category_id in category_ids):
+        raise HTTPException(status_code=422, detail="分类编号必须大于零。")
+    keyword = clean_optional_text(keyword)
+    if keyword and len(keyword) > 120:
+        raise HTTPException(status_code=422, detail="关键词不能超过 120 个字符。")
+
+    filters = [
+        "transactions.transaction_type = ?",
+        "transactions.transaction_date >= ?",
+        "transactions.transaction_date <= ?",
+    ]
+    parameters: list[Any] = [transaction_type, start_date, end_date]
+    if account_id is not None:
+        filters.append(
+            "(transactions.source_account_id = ? OR transactions.destination_account_id = ?)"
+        )
+        parameters.extend([account_id, account_id])
+    if category_ids:
+        placeholders = ", ".join("?" for _ in category_ids)
+        filters.append(f"transactions.category_id IN ({placeholders})")
+        parameters.extend(category_ids)
+    if manual_adjustments_only:
+        filters.append(
+            "transactions.transaction_type = 'adjustment' "
+            "AND investment_valuations.id IS NULL"
+        )
+    if flagged_only:
+        filters.append("flags.id IS NOT NULL")
+    if keyword:
+        filters.append(
+            """
+            (
+                COALESCE(categories.name, '') LIKE ?
+                OR COALESCE(transactions.counterparty, '') LIKE ?
+                OR COALESCE(transactions.note, '') LIKE ?
+                OR COALESCE(source.name, '') LIKE ?
+                OR COALESCE(destination.name, '') LIKE ?
+            )
+            """
+        )
+        search_term = f"%{keyword}%"
+        parameters.extend([search_term] * 5)
+
+    where_clause = f" WHERE {' AND '.join(filters)}"
+    with connect() as connection:
+        if account_id is not None:
+            account_exists = connection.execute(
+                "SELECT 1 FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            if account_exists is None:
+                raise HTTPException(status_code=404, detail="账户不存在。")
+        rows = connection.execute(
+            f"""
+            SELECT
+                transactions.transaction_date,
+                transactions.transaction_type,
+                transactions.outflow_minor,
+                transactions.inflow_minor,
+                source.name AS source_account_name,
+                source.currency_code AS source_currency_code,
+                source_currency.decimal_places AS source_decimal_places,
+                destination.name AS destination_account_name,
+                destination.currency_code AS destination_currency_code,
+                destination_currency.decimal_places AS destination_decimal_places,
+                categories.name AS category_name
+            FROM transactions
+            LEFT JOIN accounts AS source ON source.id = transactions.source_account_id
+            LEFT JOIN currencies AS source_currency ON source_currency.code = source.currency_code
+            LEFT JOIN accounts AS destination ON destination.id = transactions.destination_account_id
+            LEFT JOIN currencies AS destination_currency
+                ON destination_currency.code = destination.currency_code
+            LEFT JOIN categories ON categories.id = transactions.category_id
+            LEFT JOIN transaction_flags AS flags ON flags.transaction_id = transactions.id
+            LEFT JOIN investment_valuations
+                ON investment_valuations.generated_transaction_id = transactions.id
+            {where_clause}
+            ORDER BY transactions.transaction_date ASC, transactions.id ASC
+            """,
+            parameters,
+        ).fetchall()
+        rate_rows = connection.execute(
+            """
+            SELECT rate_date, usd_cny_rate, hkd_cny_rate
+            FROM daily_cny_exchange_rates
+            ORDER BY rate_date ASC
+            """
+        ).fetchall()
+
+    result = build_transaction_analysis(
+        rows,
+        rate_rows,
+        start_date,
+        end_date,
+        transaction_type,
+    )
+    result["filters"] = {
+        "account_id": account_id,
+        "start_date": start_date,
+        "end_date": end_date,
+        "transaction_type": transaction_type,
+        "category_ids": category_ids,
+        "keyword": keyword,
+        "manual_adjustments_only": manual_adjustments_only,
+        "flagged_only": flagged_only,
+    }
+    return result
 
 
 @app.get("/api/transactions/{transaction_id}")

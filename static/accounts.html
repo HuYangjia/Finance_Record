@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>个人财务账本 - 账户与流水</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260904-4">
+    <link rel="stylesheet" href="/static/styles.css?v=20260904-5">
   </head>
   <body>
     <header class="topbar">
@@ -224,6 +224,15 @@
           <button id="next-search-page" class="icon-button" type="button" aria-label="下一页" title="下一页">&#8594;</button>
         </div>
       </section>
+
+      <section id="transaction-analysis-panel" class="transaction-analysis-panel" data-detail-view="search" hidden aria-labelledby="transaction-analysis-title">
+        <div class="section-heading">
+          <h2 id="transaction-analysis-title">流水详情</h2>
+          <span id="analysis-status" role="status"></span>
+        </div>
+        <div id="analysis-constraint" class="empty-notice"></div>
+        <div id="analysis-content" class="analysis-content" hidden></div>
+      </section>
     </main>
 
     <dialog id="transaction-editor-dialog" class="app-dialog">
@@ -405,6 +414,6 @@
       </form>
     </dialog>
 
-    <script src="/static/accounts.js"></script>
+    <script src="/static/accounts.js?v=20260904-5"></script>
   </body>
 </html>

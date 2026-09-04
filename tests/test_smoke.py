@@ -36,6 +36,7 @@ from app.main import (
     investment_performance,
     search_transactions,
     sync_daily_cny_exchange_rates,
+    transaction_analysis,
     update_daily_cny_exchange_rate,
     update_opening_balance,
     update_transaction,
@@ -409,6 +410,79 @@ class FinanceAppSmokeTest(unittest.TestCase):
             }
         self.assertTrue({"update", "delete", "flag", "create", "reconcile"} <= audit_actions)
         self.assertGreaterEqual(len(list(database.BACKUP_DIR.glob("finance-*.db"))), 7)
+
+    def test_transaction_analysis_converts_main_amounts_to_hkd(self):
+        accounts = {account["code"]: account for account in list_accounts()}
+        update_daily_cny_exchange_rate(
+            "2026-09-03",
+            DailyCnyRateUpdate(
+                usd_cny_rate="7.2",
+                hkd_cny_rate="0.9",
+                note="统计测试汇率",
+            ),
+        )
+        create_expense(
+            ExpenseCreate(
+                transaction_date="2026-09-02",
+                source_account_id=accounts["CNY-BANK-01"]["id"],
+                amount="9",
+                category_id=self.food_category_id,
+                note="CNY 邻近汇率",
+            )
+        )
+        create_expense(
+            ExpenseCreate(
+                transaction_date="2026-09-02",
+                source_account_id=accounts["HKD-BANK-01"]["id"],
+                amount="20",
+                category_id=self.food_category_id,
+                note="HKD 直接统计",
+            )
+        )
+        create_expense(
+            ExpenseCreate(
+                transaction_date="2026-09-02",
+                source_account_id=accounts["USD-BANK-01"]["id"],
+                amount="10",
+                category_id=self.food_category_id,
+                note="USD 邻近汇率",
+            )
+        )
+        create_expense(
+            ExpenseCreate(
+                transaction_date="2026-09-03",
+                source_account_id=accounts["CNY-BANK-01"]["id"],
+                amount="9",
+                category_id=self.food_category_id,
+                note="CNY 当天汇率",
+            )
+        )
+
+        analysis = transaction_analysis(
+            transaction_type="expense",
+            start_date="2026-09-02",
+            end_date="2026-09-03",
+            category_ids=[self.food_category_id],
+        )
+        self.assertEqual(analysis["currency_code"], "HKD")
+        self.assertEqual(analysis["matched_transaction_count"], 4)
+        self.assertEqual(analysis["rate_coverage"]["direct_hkd_count"], 1)
+        self.assertEqual(analysis["rate_coverage"]["exact_rate_count"], 1)
+        self.assertEqual(analysis["rate_coverage"]["nearest_rate_count"], 2)
+        self.assertEqual(analysis["rate_coverage"]["excluded_count"], 0)
+        self.assertEqual(analysis["statistics"]["total_amount"], "120.00")
+        self.assertEqual(analysis["statistics"]["transaction_count"], 4)
+        self.assertEqual(analysis["statistics"]["median_amount"], "15.00")
+        self.assertEqual(analysis["statistics"]["maximum_day_date"], "2026-09-02")
+        self.assertEqual(analysis["statistics"]["maximum_day_amount"], "110.00")
+        self.assertEqual(
+            analysis["daily_totals"],
+            [
+                {"transaction_date": "2026-09-02", "amount": "110.00", "count": 3},
+                {"transaction_date": "2026-09-03", "amount": "10.00", "count": 1},
+            ],
+        )
+        self.assertEqual(sum(item["count"] for item in analysis["histogram"]), 4)
 
     def test_investment_valuation_recalculates_and_converts_base_currency(self):
         accounts = {account["code"]: account for account in list_accounts()}
