@@ -6,3 +6,5 @@ data/
 backups/
 exports/
 个人财务账本.xlsx
+*.log
+Snipaste_*.png
