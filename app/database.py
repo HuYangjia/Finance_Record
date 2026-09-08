@@ -28,6 +28,7 @@ CATEGORY_SEED = (
     ("income", "其他收入", 90),
     ("expense", "住房", 10),
     ("expense", "餐饮", 20),
+    ("expense", "食品杂货", 25),
     ("expense", "交通", 30),
     ("expense", "学习与科研", 40),
     ("expense", "医疗与保险", 50),
@@ -35,6 +36,7 @@ CATEGORY_SEED = (
     ("expense", "日常购物", 70),
     ("expense", "社交与娱乐", 80),
     ("expense", "家庭与人情", 90),
+    ("expense", "工资/劳务支出", 95),
     ("expense", "金融费用", 100),
     ("expense", "其他", 110),
 )

@@ -118,6 +118,13 @@ class FinanceAppSmokeTest(unittest.TestCase):
             self.salary_category_id = connection.execute(
                 "SELECT id FROM categories WHERE kind = 'income' AND name = '工资/劳务'"
             ).fetchone()["id"]
+            self.payroll_expense_category_id = connection.execute(
+                """
+                SELECT id
+                FROM categories
+                WHERE kind = 'expense' AND name = '工资/劳务支出'
+                """
+            ).fetchone()["id"]
 
     def tearDown(self):
         database.DATA_DIR = self.original_data_dir
@@ -156,6 +163,50 @@ class FinanceAppSmokeTest(unittest.TestCase):
         self.assertIn("月度总览", workbook.sheetnames)
         self.assertIn("账户内流动", workbook.sheetnames)
         self.assertEqual(workbook["月度总览"]["E3"].value, "可用现金")
+
+    def test_default_expense_categories_include_food_groceries_and_payroll(self):
+        with database.connect() as connection:
+            food_category = connection.execute(
+                """
+                SELECT sort_order
+                FROM categories
+                WHERE kind = 'expense' AND name = '食品杂货'
+                """
+            ).fetchone()
+            payroll_category = connection.execute(
+                """
+                SELECT sort_order
+                FROM categories
+                WHERE kind = 'expense' AND name = '工资/劳务支出'
+                """
+            ).fetchone()
+
+        self.assertIsNotNone(food_category)
+        self.assertEqual(food_category["sort_order"], 25)
+        self.assertIsNotNone(payroll_category)
+        self.assertEqual(payroll_category["sort_order"], 95)
+
+    def test_payroll_expense_category_creates_expense(self):
+        accounts = {account["code"]: account for account in list_accounts()}
+        response = create_expense(
+            ExpenseCreate(
+                transaction_date="2026-09-02",
+                source_account_id=accounts["CNY-BANK-01"]["id"],
+                amount="500",
+                category_id=self.payroll_expense_category_id,
+                counterparty="兼职助理",
+                note="2026 年 9 月劳务费",
+            )
+        )
+
+        self.assertEqual(response["amount"], "500.00")
+        result = search_transactions(
+            start_date="2026-09-02",
+            end_date="2026-09-02",
+            category_ids=[self.payroll_expense_category_id],
+        )
+        self.assertEqual(result["pagination"]["total"], 1)
+        self.assertEqual(result["transactions"][0]["category_name"], "工资/劳务支出")
 
     def test_liability_expense_increases_debt(self):
         accounts = list_accounts()
