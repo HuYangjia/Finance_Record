@@ -173,6 +173,7 @@ main {
 .account-summary-panel,
 .ledger-panel,
 .transaction-search-panel,
+.transaction-search-summary-panel,
 .transaction-analysis-panel {
   background: #fff;
   border: 1px solid #d9e0e5;
@@ -191,6 +192,7 @@ main {
 .account-filter-panel,
 .account-summary-panel,
 .transaction-search-panel,
+.transaction-search-summary-panel,
 .transaction-analysis-panel {
   margin-bottom: 18px;
 }
@@ -681,6 +683,96 @@ th {
   gap: 24px;
 }
 
+.search-summary-block + .search-summary-block {
+  border-top: 1px solid #e0e6ea;
+  margin-top: 20px;
+  padding-top: 20px;
+}
+
+.search-summary-block h3 {
+  color: #43515e;
+  font-size: 14px;
+  margin: 0 0 12px;
+}
+
+.search-summary-block > .search-summary-block {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.search-summary-block > .search-summary-block + .search-summary-block {
+  margin-top: 18px;
+}
+
+.search-summary-table td:nth-child(n + 2),
+.search-summary-table th:nth-child(n + 2) {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.search-summary-table td:nth-child(5),
+.search-summary-table th:nth-child(5) {
+  text-align: left;
+  white-space: normal;
+}
+
+.search-summary-table td:nth-child(5) {
+  color: #64717d;
+  font-size: 12px;
+  text-align: left;
+}
+
+.search-summary-type-list {
+  display: grid;
+  gap: 18px;
+}
+
+.search-summary-type {
+  border-top: 1px solid #e0e6ea;
+  padding-top: 16px;
+}
+
+.search-summary-type-heading {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.search-summary-type-heading h4 {
+  color: #43515e;
+  font-size: 14px;
+  margin: 0;
+}
+
+.search-summary-type-heading span {
+  color: #64717d;
+  font-size: 13px;
+}
+
+.search-summary-type-tables {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.search-summary-type-tables > .search-summary-block + .search-summary-block {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.search-summary-type-tables .search-summary-block h3 {
+  font-size: 13px;
+}
+
+.search-summary-type-tables .search-summary-table {
+  min-width: 0;
+}
+
 .analysis-block {
   border-top: 1px solid #e0e6ea;
   padding-top: 20px;
@@ -1015,13 +1107,15 @@ button.analysis-calendar-day:not(:disabled):hover {
   .account-summary-panel,
   .ledger-panel,
   .transaction-search-panel,
+  .transaction-search-summary-panel,
   .transaction-analysis-panel {
     padding: 15px;
   }
 
   .form-grid,
   .detail-filter-grid,
-  .quick-action-list {
+  .quick-action-list,
+  .search-summary-type-tables {
     grid-template-columns: 1fr;
   }
 

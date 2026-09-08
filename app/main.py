@@ -50,6 +50,8 @@ TRANSACTION_ANALYSIS_ACCOUNT_LABELS = {
     "adjustment": "调整账户",
 }
 WEEKDAY_LABELS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+BASE_CURRENCY_CODES = ("CNY", "HKD")
+CURRENCY_DISPLAY_ORDER = ("CNY", "HKD", "USD", "EUR", "JPY")
 FLAG_TYPE_LABELS = {
     "suspected_duplicate": "疑似重复",
     "missing_information": "信息不完整",
@@ -2592,42 +2594,16 @@ def list_transactions(limit: int = Query(default=20, ge=1, le=100)):
     return result
 
 
-@app.get("/api/transactions/search")
-def search_transactions(
-    account_id: int | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    transaction_types: list[str] = Query(default=[]),
-    category_ids: list[int] = Query(default=[]),
-    keyword: str | None = None,
-    manual_adjustments_only: bool = False,
-    flagged_only: bool = False,
-    limit: int = 50,
-    offset: int = 0,
-):
-    start_date = validate_optional_date(start_date, "开始日期")
-    end_date = validate_optional_date(end_date, "结束日期")
-    if start_date and end_date and start_date > end_date:
-        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期。")
-    if not isinstance(transaction_types, list):
-        transaction_types = []
-    if not isinstance(category_ids, list):
-        category_ids = []
-    transaction_types = list(dict.fromkeys(transaction_types))
-    invalid_types = set(transaction_types) - set(TRANSACTION_TYPE_LABELS)
-    if invalid_types:
-        raise HTTPException(status_code=422, detail="流水类型不支持。")
-    category_ids = list(dict.fromkeys(category_ids))
-    if any(category_id < 1 for category_id in category_ids):
-        raise HTTPException(status_code=422, detail="分类编号必须大于零。")
-    if limit < 1 or limit > 200:
-        raise HTTPException(status_code=422, detail="每页数量必须在 1 到 200 之间。")
-    if offset < 0:
-        raise HTTPException(status_code=422, detail="分页起点不能小于零。")
-    keyword = clean_optional_text(keyword)
-    if keyword and len(keyword) > 120:
-        raise HTTPException(status_code=422, detail="关键词不能超过 120 个字符。")
-
+def build_transaction_search_filters(
+    account_id: int | None,
+    start_date: str | None,
+    end_date: str | None,
+    transaction_types: list[str],
+    category_ids: list[int],
+    keyword: str | None,
+    manual_adjustments_only: bool,
+    flagged_only: bool,
+) -> tuple[list[str], list[Any]]:
     filters = []
     parameters: list[Any] = []
     if account_id is not None:
@@ -2670,6 +2646,55 @@ def search_transactions(
         )
         search_term = f"%{keyword}%"
         parameters.extend([search_term] * 5)
+    return filters, parameters
+
+
+@app.get("/api/transactions/search")
+def search_transactions(
+    account_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    transaction_types: list[str] = Query(default=[]),
+    category_ids: list[int] = Query(default=[]),
+    keyword: str | None = None,
+    manual_adjustments_only: bool = False,
+    flagged_only: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+):
+    start_date = validate_optional_date(start_date, "开始日期")
+    end_date = validate_optional_date(end_date, "结束日期")
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期。")
+    if not isinstance(transaction_types, list):
+        transaction_types = []
+    if not isinstance(category_ids, list):
+        category_ids = []
+    transaction_types = list(dict.fromkeys(transaction_types))
+    invalid_types = set(transaction_types) - set(TRANSACTION_TYPE_LABELS)
+    if invalid_types:
+        raise HTTPException(status_code=422, detail="流水类型不支持。")
+    category_ids = list(dict.fromkeys(category_ids))
+    if any(category_id < 1 for category_id in category_ids):
+        raise HTTPException(status_code=422, detail="分类编号必须大于零。")
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=422, detail="每页数量必须在 1 到 200 之间。")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="分页起点不能小于零。")
+    keyword = clean_optional_text(keyword)
+    if keyword and len(keyword) > 120:
+        raise HTTPException(status_code=422, detail="关键词不能超过 120 个字符。")
+
+    filters, parameters = build_transaction_search_filters(
+        account_id,
+        start_date,
+        end_date,
+        transaction_types,
+        category_ids,
+        keyword,
+        manual_adjustments_only,
+        flagged_only,
+    )
     where_clause = f" WHERE {' AND '.join(filters)}" if filters else ""
 
     transaction_query = """
@@ -2723,6 +2748,42 @@ def search_transactions(
             """,
             parameters + [limit, offset],
         ).fetchall()
+        summary_rows = []
+        rate_rows = []
+        currency_decimal_places: dict[str, int] = {}
+        if start_date and end_date:
+            summary_rows = connection.execute(
+                f"""
+                SELECT
+                    transactions.id,
+                    transactions.transaction_date,
+                    transactions.transaction_type,
+                    transactions.source_account_id,
+                    transactions.destination_account_id,
+                    transactions.outflow_minor,
+                    transactions.inflow_minor,
+                    source.currency_code AS source_currency_code,
+                    source_currency.decimal_places AS source_decimal_places,
+                    destination.currency_code AS destination_currency_code,
+                    destination_currency.decimal_places AS destination_decimal_places
+                {transaction_query}
+                {where_clause}
+                """,
+                parameters,
+            ).fetchall()
+            rate_rows = connection.execute(
+                """
+                SELECT rate_date, usd_cny_rate, hkd_cny_rate
+                FROM daily_cny_exchange_rates
+                ORDER BY rate_date
+                """
+            ).fetchall()
+            currency_decimal_places = {
+                row["code"]: row["decimal_places"]
+                for row in connection.execute(
+                    "SELECT code, decimal_places FROM currencies"
+                ).fetchall()
+            }
 
     transactions = [
         {
@@ -2766,6 +2827,20 @@ def search_transactions(
         }
         for row in rows
     ]
+    summary = (
+        build_transaction_search_summary(
+            summary_rows,
+            rate_rows,
+            account_id,
+            transaction_types,
+            currency_decimal_places,
+        )
+        if start_date and end_date
+        else {
+            "available": False,
+            "reason": "请选择完整日期范围后查看金额汇总。",
+        }
+    )
     return {
         "filters": {
             "account_id": account_id,
@@ -2782,6 +2857,7 @@ def search_transactions(
             "offset": offset,
             "total": total_row["total"],
         },
+        "summary": summary,
         "transactions": transactions,
     }
 
@@ -2831,15 +2907,20 @@ def nearest_cny_exchange_rate(
     )
 
 
-def amount_to_hkd(
+def amount_to_base_currency(
     amount: Decimal,
     currency_code: str,
     transaction_date: str,
     rate_rows,
+    base_currency_code: str,
 ) -> tuple[Decimal | None, str | None]:
-    if currency_code == "HKD":
+    if currency_code == base_currency_code:
         return amount, "direct"
-    if currency_code not in {"CNY", "USD"} or not rate_rows:
+    if (
+        base_currency_code not in BASE_CURRENCY_CODES
+        or currency_code not in {"CNY", "HKD", "USD"}
+        or not rate_rows
+    ):
         return None, None
     rate = nearest_cny_exchange_rate(rate_rows, transaction_date)
     try:
@@ -2849,40 +2930,362 @@ def amount_to_hkd(
         return None, None
     if hkd_cny_rate <= 0 or usd_cny_rate <= 0:
         return None, None
-    if currency_code == "CNY":
-        converted = amount / hkd_cny_rate
+    if base_currency_code == "CNY":
+        converted = (
+            amount * hkd_cny_rate
+            if currency_code == "HKD"
+            else amount * usd_cny_rate
+        )
     else:
-        converted = amount * usd_cny_rate / hkd_cny_rate
+        converted = (
+            amount / hkd_cny_rate
+            if currency_code == "CNY"
+            else amount * usd_cny_rate / hkd_cny_rate
+        )
     return converted, "exact" if rate["rate_date"] == transaction_date else "nearest"
 
 
-def build_hkd_histogram(amounts: list[Decimal]) -> list[dict[str, Any]]:
-    if not amounts:
-        return []
-    minimum = min(amounts)
-    maximum = max(amounts)
-    if minimum == maximum:
-        return [
-            {
-                "start": format_decimal(minimum, 2),
-                "end": format_decimal(maximum, 2),
-                "count": len(amounts),
-            }
-        ]
+def amount_to_hkd(
+    amount: Decimal,
+    currency_code: str,
+    transaction_date: str,
+    rate_rows,
+) -> tuple[Decimal | None, str | None]:
+    return amount_to_base_currency(
+        amount,
+        currency_code,
+        transaction_date,
+        rate_rows,
+        "HKD",
+    )
 
-    bin_count = min(8, max(2, round(len(amounts) ** 0.5)))
-    interval = (maximum - minimum) / Decimal(bin_count)
+
+def new_flow_totals() -> dict[str, Decimal]:
+    return {
+        "inflow": Decimal(0),
+        "outflow": Decimal(0),
+    }
+
+
+def new_rate_coverage() -> dict[str, Any]:
+    return {
+        "direct_base_currency_leg_count": 0,
+        "exact_rate_leg_count": 0,
+        "nearest_rate_leg_count": 0,
+        "excluded_leg_count": 0,
+        "missing_currencies": set(),
+    }
+
+
+def new_transaction_search_summary_bucket() -> dict[str, Any]:
+    return {
+        "transaction_count": 0,
+        "raw_totals_by_currency": {},
+        "valuations": {
+            currency_code: {
+                **new_flow_totals(),
+                "rate_coverage": new_rate_coverage(),
+            }
+            for currency_code in BASE_CURRENCY_CODES
+        },
+    }
+
+
+def add_flow_total(
+    totals_by_currency: dict[str, dict[str, Decimal]],
+    currency_code: str,
+    direction: str,
+    amount: Decimal,
+) -> None:
+    totals = totals_by_currency.setdefault(currency_code, new_flow_totals())
+    totals[direction] += amount
+
+
+def add_valuation_coverage(
+    coverage: dict[str, Any],
+    rate_status: str | None,
+    currency_code: str,
+) -> None:
+    if rate_status == "direct":
+        coverage["direct_base_currency_leg_count"] += 1
+    elif rate_status == "exact":
+        coverage["exact_rate_leg_count"] += 1
+    elif rate_status == "nearest":
+        coverage["nearest_rate_leg_count"] += 1
+    else:
+        coverage["excluded_leg_count"] += 1
+        coverage["missing_currencies"].add(currency_code)
+
+
+def add_transaction_search_summary_leg(
+    buckets: tuple[dict[str, Any], ...],
+    *,
+    currency_code: str,
+    direction: str,
+    amount: Decimal,
+    transaction_date: str,
+    rate_rows,
+) -> None:
+    for bucket in buckets:
+        add_flow_total(
+            bucket["raw_totals_by_currency"],
+            currency_code,
+            direction,
+            amount,
+        )
+
+    for base_currency_code in BASE_CURRENCY_CODES:
+        converted, rate_status = amount_to_base_currency(
+            amount,
+            currency_code,
+            transaction_date,
+            rate_rows,
+            base_currency_code,
+        )
+        for bucket in buckets:
+            valuation = bucket["valuations"][base_currency_code]
+            add_valuation_coverage(
+                valuation["rate_coverage"],
+                rate_status,
+                currency_code,
+            )
+            if converted is not None:
+                valuation[direction] += converted
+
+
+def currency_display_sort_key(currency_code: str) -> tuple[int, str]:
+    try:
+        return CURRENCY_DISPLAY_ORDER.index(currency_code), currency_code
+    except ValueError:
+        return len(CURRENCY_DISPLAY_ORDER), currency_code
+
+
+def serialize_flow_totals(
+    totals_by_currency: dict[str, dict[str, Decimal]],
+    currency_decimal_places: dict[str, int],
+    currency_codes: tuple[str, ...] | None = None,
+) -> list[dict[str, str]]:
+    codes = (
+        currency_codes
+        if currency_codes is not None
+        else tuple(sorted(totals_by_currency, key=currency_display_sort_key))
+    )
+    result = []
+    for currency_code in codes:
+        totals = totals_by_currency.get(currency_code, new_flow_totals())
+        decimal_places = currency_decimal_places.get(currency_code, 2)
+        inflow = totals["inflow"]
+        outflow = totals["outflow"]
+        result.append(
+            {
+                "currency_code": currency_code,
+                "inflow_amount": format_decimal(inflow, decimal_places),
+                "outflow_amount": format_decimal(outflow, decimal_places),
+                "net_amount": format_decimal(inflow - outflow, decimal_places),
+            }
+        )
+    return result
+
+
+def serialize_rate_coverage(coverage: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "direct_base_currency_leg_count": coverage[
+            "direct_base_currency_leg_count"
+        ],
+        "exact_rate_leg_count": coverage["exact_rate_leg_count"],
+        "nearest_rate_leg_count": coverage["nearest_rate_leg_count"],
+        "excluded_leg_count": coverage["excluded_leg_count"],
+        "missing_currencies": sorted(coverage["missing_currencies"]),
+    }
+
+
+def serialize_transaction_search_valuations(
+    bucket: dict[str, Any],
+    include_rate_coverage: bool,
+) -> list[dict[str, Any]]:
+    result = []
+    for currency_code in BASE_CURRENCY_CODES:
+        valuation = bucket["valuations"][currency_code]
+        item: dict[str, Any] = {
+            "currency_code": currency_code,
+            "inflow_amount": format_decimal(valuation["inflow"], 2),
+            "outflow_amount": format_decimal(valuation["outflow"], 2),
+            "net_amount": format_decimal(
+                valuation["inflow"] - valuation["outflow"],
+                2,
+            ),
+        }
+        if include_rate_coverage:
+            item["rate_coverage"] = serialize_rate_coverage(
+                valuation["rate_coverage"]
+            )
+        result.append(item)
+    return result
+
+
+def build_transaction_search_summary(
+    rows,
+    rate_rows,
+    account_id: int | None,
+    selected_transaction_types: list[str],
+    currency_decimal_places: dict[str, int],
+) -> dict[str, Any]:
+    combined = new_transaction_search_summary_bucket()
+    type_buckets: dict[str, dict[str, Any]] = {}
+
+    for row in rows:
+        transaction_type = row["transaction_type"]
+        type_bucket = type_buckets.setdefault(
+            transaction_type,
+            new_transaction_search_summary_bucket(),
+        )
+        combined["transaction_count"] += 1
+        type_bucket["transaction_count"] += 1
+        buckets = (combined, type_bucket)
+
+        if row["source_account_id"] is not None and (
+            account_id is None or row["source_account_id"] == account_id
+        ):
+            add_transaction_search_summary_leg(
+                buckets,
+                currency_code=row["source_currency_code"],
+                direction="outflow",
+                amount=amount_from_minor(
+                    row["outflow_minor"],
+                    row["source_decimal_places"],
+                ),
+                transaction_date=row["transaction_date"],
+                rate_rows=rate_rows,
+            )
+        if row["destination_account_id"] is not None and (
+            account_id is None or row["destination_account_id"] == account_id
+        ):
+            add_transaction_search_summary_leg(
+                buckets,
+                currency_code=row["destination_currency_code"],
+                direction="inflow",
+                amount=amount_from_minor(
+                    row["inflow_minor"],
+                    row["destination_decimal_places"],
+                ),
+                transaction_date=row["transaction_date"],
+                rate_rows=rate_rows,
+            )
+
+    transaction_types = (
+        selected_transaction_types
+        if selected_transaction_types
+        else [
+            transaction_type
+            for transaction_type in TRANSACTION_TYPE_LABELS
+            if transaction_type in type_buckets
+        ]
+    )
+    return {
+        "available": True,
+        "scope": {
+            "mode": "selected_account" if account_id is not None else "all_accounts",
+            "account_id": account_id,
+        },
+        "transaction_count": combined["transaction_count"],
+        "raw_totals_by_currency": serialize_flow_totals(
+            combined["raw_totals_by_currency"],
+            currency_decimal_places,
+        ),
+        "valuations": serialize_transaction_search_valuations(
+            combined,
+            include_rate_coverage=True,
+        ),
+        "by_type": [
+            {
+                "transaction_type": transaction_type,
+                "transaction_type_label": TRANSACTION_TYPE_LABELS[transaction_type],
+                "transaction_count": type_buckets.get(
+                    transaction_type,
+                    new_transaction_search_summary_bucket(),
+                )["transaction_count"],
+                "raw_totals_by_currency": serialize_flow_totals(
+                    type_buckets.get(
+                        transaction_type,
+                        new_transaction_search_summary_bucket(),
+                    )["raw_totals_by_currency"],
+                    currency_decimal_places,
+                ),
+                "valuations": serialize_transaction_search_valuations(
+                    type_buckets.get(
+                        transaction_type,
+                        new_transaction_search_summary_bucket(),
+                    ),
+                    include_rate_coverage=False,
+                ),
+            }
+            for transaction_type in transaction_types
+        ],
+    }
+
+
+def nice_hkd_bucket_width(target_width: Decimal) -> int:
+    """Return a 1/2/5-based integer HKD bucket width near the target width."""
+    target_width = max(target_width, Decimal(1))
+    exponent = max(target_width.adjusted(), 0)
+    candidates = [
+        multiplier * (10**power)
+        for power in range(max(0, exponent - 2), exponent + 3)
+        for multiplier in (1, 2, 5)
+    ]
+    return min(
+        candidates,
+        key=lambda candidate: (abs(Decimal(candidate) - target_width), candidate),
+    )
+
+
+def next_nice_hkd_bucket_width(current_width: int) -> int:
+    exponent = len(str(current_width))
+    candidates = [
+        multiplier * (10**power)
+        for power in range(0, exponent + 2)
+        for multiplier in (1, 2, 5)
+    ]
+    return min(candidate for candidate in candidates if candidate > current_width)
+
+
+def hkd_bucket_bounds(
+    minimum: Decimal,
+    maximum: Decimal,
+    width: int,
+) -> tuple[int, int]:
+    lower = int(minimum // width) * width
+    upper = int(maximum // width) * width
+    if Decimal(upper) < maximum:
+        upper += width
+    if lower == upper:
+        upper += width
+    return lower, upper
+
+
+def build_hkd_histogram(daily_amounts: list[Decimal]) -> list[dict[str, Any]]:
+    if not daily_amounts:
+        return []
+    minimum = min(daily_amounts)
+    maximum = max(daily_amounts)
+    target_bin_count = min(8, max(2, round(len(daily_amounts) ** 0.5)))
+    target_width = max((maximum - minimum) / Decimal(target_bin_count), Decimal(1))
+    width = nice_hkd_bucket_width(target_width)
+    lower, upper = hkd_bucket_bounds(minimum, maximum, width)
+
+    while (upper - lower) // width > 8:
+        width = next_nice_hkd_bucket_width(width)
+        lower, upper = hkd_bucket_bounds(minimum, maximum, width)
+
+    bin_count = (upper - lower) // width
     counts = [0] * bin_count
-    for amount in amounts:
-        index = min(int((amount - minimum) / interval), bin_count - 1)
+    for amount in daily_amounts:
+        index = min(int((amount - Decimal(lower)) // width), bin_count - 1)
         counts[index] += 1
     return [
         {
-            "start": format_decimal(minimum + interval * index, 2),
-            "end": format_decimal(
-                maximum if index == bin_count - 1 else minimum + interval * (index + 1),
-                2,
-            ),
+            "start": lower + width * index,
+            "end": lower + width * (index + 1),
             "count": counts[index],
         }
         for index in range(bin_count)
@@ -2937,7 +3340,12 @@ def build_transaction_analysis(
     category_totals: dict[str, dict[str, Any]] = {}
     account_totals: dict[str, dict[str, Any]] = {}
     weekday_totals = [
-        {"weekday": index, "label": label, "amount": Decimal(0), "count": 0}
+        {
+            "weekday": index,
+            "label": label,
+            "amount": Decimal(0),
+            "active_day_count": 0,
+        }
         for index, label in enumerate(WEEKDAY_LABELS)
     ]
     direction_totals: dict[str, dict[str, Any]] = {}
@@ -2963,12 +3371,6 @@ def build_transaction_analysis(
         account["amount"] += record["amount_hkd"]
         account["count"] += 1
 
-        weekday = weekday_totals[
-            date.fromisoformat(record["transaction_date"]).weekday()
-        ]
-        weekday["amount"] += record["amount_hkd"]
-        weekday["count"] += 1
-
         if record["direction"]:
             direction = direction_totals.setdefault(
                 record["direction"],
@@ -2977,41 +3379,54 @@ def build_transaction_analysis(
             direction["amount"] += record["amount_hkd"]
             direction["count"] += 1
 
-    amounts = [record["amount_hkd"] for record in converted_records]
+    daily_amounts = [values["amount"] for values in daily_totals.values()]
+    for transaction_date, values in daily_totals.items():
+        weekday = weekday_totals[date.fromisoformat(transaction_date).weekday()]
+        weekday["amount"] += values["amount"]
+        weekday["active_day_count"] += 1
+
     statistics = None
-    if amounts:
-        total = sum(amounts, Decimal(0))
-        count = len(amounts)
-        mean = total / count
-        sorted_amounts = sorted(amounts)
-        middle = count // 2
+    if daily_amounts:
+        total = sum(daily_amounts, Decimal(0))
+        active_day_count = len(daily_amounts)
+        range_day_count = (
+            date.fromisoformat(end_date) - date.fromisoformat(start_date)
+        ).days + 1
+        active_day_mean = total / active_day_count
+        calendar_day_mean = total / range_day_count
+        sorted_daily_amounts = sorted(daily_amounts)
+        middle = active_day_count // 2
         median = (
-            sorted_amounts[middle]
-            if count % 2
-            else (sorted_amounts[middle - 1] + sorted_amounts[middle]) / 2
+            sorted_daily_amounts[middle]
+            if active_day_count % 2
+            else (
+                sorted_daily_amounts[middle - 1] + sorted_daily_amounts[middle]
+            )
+            / 2
         )
         variance = sum(
-            ((amount - mean) ** 2 for amount in amounts),
+            ((amount - active_day_mean) ** 2 for amount in daily_amounts),
             Decimal(0),
-        ) / count
+        ) / active_day_count
         maximum_day_date, maximum_day = max(
             daily_totals.items(),
             key=lambda item: (item[1]["amount"], item[0]),
         )
-        range_day_count = (
-            date.fromisoformat(end_date) - date.fromisoformat(start_date)
-        ).days + 1
         statistics = {
             "total_amount": format_decimal(total, 2),
-            "transaction_count": count,
-            "active_day_count": len(daily_totals),
+            "converted_transaction_count": len(converted_records),
+            "active_day_count": active_day_count,
             "range_day_count": range_day_count,
-            "mean_amount": format_decimal(mean, 2),
-            "median_amount": format_decimal(median, 2),
-            "minimum_amount": format_decimal(min(amounts), 2),
-            "maximum_amount": format_decimal(max(amounts), 2),
-            "population_variance": format_decimal(variance, 4),
-            "population_standard_deviation": format_decimal(variance.sqrt(), 2),
+            "calendar_day_mean": format_decimal(calendar_day_mean, 2),
+            "active_day_mean": format_decimal(active_day_mean, 2),
+            "median_daily_amount": format_decimal(median, 2),
+            "minimum_daily_amount": format_decimal(min(daily_amounts), 2),
+            "maximum_daily_amount": format_decimal(max(daily_amounts), 2),
+            "population_daily_variance": format_decimal(variance, 4),
+            "population_daily_standard_deviation": format_decimal(
+                variance.sqrt(),
+                2,
+            ),
             "maximum_day_date": maximum_day_date,
             "maximum_day_amount": format_decimal(maximum_day["amount"], 2),
         }
@@ -3052,13 +3467,13 @@ def build_transaction_analysis(
             for transaction_date, values in sorted(daily_totals.items())
         ],
         "statistics": statistics,
-        "histogram": build_hkd_histogram(amounts),
+        "histogram": build_hkd_histogram(daily_amounts),
         "weekday_distribution": [
             {
                 "weekday": item["weekday"],
                 "label": item["label"],
                 "amount": format_decimal(item["amount"], 2),
-                "count": item["count"],
+                "active_day_count": item["active_day_count"],
             }
             for item in weekday_totals
         ],

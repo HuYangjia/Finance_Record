@@ -46,6 +46,9 @@ const searchCategorySummary = document.querySelector("#search-category-summary")
 const searchStatus = document.querySelector("#search-status");
 const previousSearchPageButton = document.querySelector("#previous-search-page");
 const nextSearchPageButton = document.querySelector("#next-search-page");
+const transactionSearchSummaryPanel = document.querySelector("#transaction-search-summary-panel");
+const transactionSearchSummaryMeta = document.querySelector("#transaction-search-summary-meta");
+const transactionSearchSummaryContent = document.querySelector("#transaction-search-summary-content");
 const transactionAnalysisPanel = document.querySelector("#transaction-analysis-panel");
 const analysisStatus = document.querySelector("#analysis-status");
 const analysisConstraint = document.querySelector("#analysis-constraint");
@@ -181,6 +184,7 @@ function updateViewVisibility() {
   accountSummaryPanel.hidden = !showingAccount || !state.detail.loaded;
   ledgerPanel.hidden = !showingAccount || !state.detail.loaded;
   searchPanel.hidden = showingAccount;
+  transactionSearchSummaryPanel.hidden = showingAccount || !state.search.loaded;
   searchResultsPanel.hidden = showingAccount || !state.search.loaded;
   transactionAnalysisPanel.hidden = showingAccount || !state.search.loaded;
 }
@@ -493,6 +497,154 @@ function updateSearchPagination(pagination) {
   nextSearchPageButton.disabled = pagination.offset + pagination.limit >= pagination.total;
 }
 
+function formatSummaryAmount(amount, currencyCode, includeSign = false) {
+  const numericAmount = Number(amount);
+  const sign = includeSign && numericAmount > 0 ? "+" : "";
+  return `${sign}${amount} ${currencyCode}`;
+}
+
+function createSummaryFlowTable(records, currencyLabel, includeCoverage = false) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "table-wrap";
+  const table = document.createElement("table");
+  table.className = "search-summary-table";
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  const headers = [currencyLabel, "流入", "流出", "净流动"];
+  if (includeCoverage) {
+    headers.push("汇率覆盖");
+  }
+  for (const header of headers) {
+    const cell = document.createElement("th");
+    cell.textContent = header;
+    headRow.append(cell);
+  }
+  head.append(headRow);
+
+  const body = document.createElement("tbody");
+  for (const record of records) {
+    const values = [
+      record.currency_code,
+      formatSummaryAmount(record.inflow_amount, record.currency_code),
+      formatSummaryAmount(record.outflow_amount, record.currency_code),
+      formatSummaryAmount(record.net_amount, record.currency_code, true),
+    ];
+    if (includeCoverage) {
+      const coverage = record.rate_coverage;
+      const coverageParts = [
+        `直接 ${coverage.direct_base_currency_leg_count} 腿`,
+        `当日 ${coverage.exact_rate_leg_count} 腿`,
+        `邻近 ${coverage.nearest_rate_leg_count} 腿`,
+      ];
+      if (coverage.excluded_leg_count) {
+        const missing = coverage.missing_currencies.length
+          ? `（${coverage.missing_currencies.join("、")}）`
+          : "";
+        coverageParts.push(`未纳入 ${coverage.excluded_leg_count} 腿${missing}`);
+      }
+      values.push(coverageParts.join("；"));
+    }
+    const row = document.createElement("tr");
+    appendCells(row, values);
+    body.append(row);
+  }
+  table.append(head, body);
+  wrapper.append(table);
+  return wrapper;
+}
+
+function createSearchSummarySection(title, records, currencyLabel, includeCoverage = false) {
+  const section = document.createElement("section");
+  section.className = "search-summary-block";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  section.append(heading, createSummaryFlowTable(records, currencyLabel, includeCoverage));
+  return section;
+}
+
+function renderTransactionSearchSummary(summary) {
+  transactionSearchSummaryContent.replaceChildren();
+  transactionSearchSummaryMeta.textContent = "";
+
+  if (!summary.available) {
+    const notice = document.createElement("div");
+    notice.className = "empty-notice";
+    notice.textContent = summary.reason;
+    transactionSearchSummaryContent.append(notice);
+    return;
+  }
+
+  const scopeLabel = summary.scope.mode === "selected_account"
+    ? searchAccountSelect.selectedOptions[0]?.textContent || "所选账户"
+    : "全部账户";
+  transactionSearchSummaryMeta.textContent =
+    `${searchStartDateInput.value} 至 ${searchEndDateInput.value} · ${summary.transaction_count} 笔 · ${scopeLabel}`;
+
+  if (summary.transaction_count === 0) {
+    const notice = document.createElement("div");
+    notice.className = "empty-notice";
+    notice.textContent = "没有符合筛选条件的流水。";
+    transactionSearchSummaryContent.append(notice);
+    return;
+  }
+
+  const combined = document.createElement("section");
+  combined.className = "search-summary-block";
+  const heading = document.createElement("h3");
+  heading.textContent = "全部类型合计";
+  combined.append(
+    heading,
+    createSearchSummarySection("原币种明细", summary.raw_totals_by_currency, "币种"),
+    createSearchSummarySection("统一计价合计", summary.valuations, "计价货币", true),
+  );
+  transactionSearchSummaryContent.append(combined);
+
+  const typeBreakdown = document.createElement("section");
+  typeBreakdown.className = "search-summary-block";
+  const typeHeading = document.createElement("h3");
+  typeHeading.textContent = "按流水类型";
+  typeBreakdown.append(typeHeading);
+  const types = document.createElement("div");
+  types.className = "search-summary-type-list";
+  for (const typeSummary of summary.by_type) {
+    const type = document.createElement("section");
+    type.className = "search-summary-type";
+    const typeHeader = document.createElement("div");
+    typeHeader.className = "search-summary-type-heading";
+    const name = document.createElement("h4");
+    const count = document.createElement("span");
+    name.textContent = typeSummary.transaction_type_label;
+    count.textContent = `${typeSummary.transaction_count} 笔`;
+    typeHeader.append(name, count);
+    type.append(typeHeader);
+    if (typeSummary.transaction_count === 0) {
+      const empty = document.createElement("p");
+      empty.className = "analysis-summary";
+      empty.textContent = "没有符合其他筛选条件的流水。";
+      type.append(empty);
+    } else {
+      const tables = document.createElement("div");
+      tables.className = "search-summary-type-tables";
+      tables.append(
+        createSearchSummarySection(
+          "原币种明细",
+          typeSummary.raw_totals_by_currency,
+          "币种",
+        ),
+        createSearchSummarySection(
+          "统一计价合计",
+          typeSummary.valuations,
+          "计价货币",
+        ),
+      );
+      type.append(tables);
+    }
+    types.append(type);
+  }
+  typeBreakdown.append(types);
+  transactionSearchSummaryContent.append(typeBreakdown);
+}
+
 function analysisConstraintMessage() {
   const selectedTypes = selectedSearchTypes();
   if (!searchStartDateInput.value || !searchEndDateInput.value) {
@@ -672,26 +824,26 @@ function renderAnalysisCalendar(data) {
 }
 
 function renderHistogram(data) {
-  const block = createAnalysisBlock("单笔金额分布");
-  block.append(createAnalysisSummary(`单位：HKD；按${data.main_amount_label}的单笔金额自动分箱。`));
+  const block = createAnalysisBlock("每日金额分布");
+  block.append(createAnalysisSummary(
+    `单位：HKD；按每日${data.main_amount_label}合计自动分箱，区间边界为整数。`,
+  ));
   const histogram = document.createElement("div");
   histogram.className = "analysis-histogram";
   const highestCount = Math.max(...data.histogram.map((item) => item.count), 1);
   for (const bin of data.histogram) {
     const item = document.createElement("div");
     item.className = "analysis-histogram-bin";
-    item.title = `${bin.start}-${bin.end} HKD：${bin.count} 笔`;
+    item.title = `${bin.start}-${bin.end} HKD：${bin.count} 天`;
     const count = document.createElement("strong");
-    count.textContent = `${bin.count} 笔`;
+    count.textContent = `${bin.count} 天`;
     const barArea = document.createElement("div");
     barArea.className = "analysis-histogram-bar-area";
     const bar = document.createElement("div");
     bar.className = "analysis-histogram-bar";
     bar.style.height = `${Math.max(6, (bin.count / highestCount) * 100)}%`;
     const label = document.createElement("span");
-    label.textContent = bin.start === bin.end
-      ? `${bin.start} HKD`
-      : `${bin.start}-${bin.end}`;
+    label.textContent = `${bin.start}-${bin.end}`;
     barArea.append(bar);
     item.append(count, barArea, label);
     histogram.append(item);
@@ -702,7 +854,7 @@ function renderHistogram(data) {
 
 function renderWeekdayDistribution(data) {
   const block = createAnalysisBlock("星期分布");
-  block.append(createAnalysisSummary("按流水日期归集，金额单位为 HKD。"));
+  block.append(createAnalysisSummary("按每天金额归集，金额单位为 HKD。"));
   const grid = document.createElement("div");
   grid.className = "analysis-weekday-grid";
   for (const item of data.weekday_distribution) {
@@ -713,7 +865,7 @@ function renderWeekdayDistribution(data) {
     const count = document.createElement("span");
     label.textContent = item.label;
     amount.textContent = `${item.amount} HKD`;
-    count.textContent = `${item.count} 笔`;
+    count.textContent = `${item.active_day_count} 天`;
     weekday.append(label, amount, count);
     grid.append(weekday);
   }
@@ -785,13 +937,14 @@ function renderTransactionAnalysis(data) {
   metricGrid.className = "account-state-grid";
   const metrics = [
     { label: "总金额", value: `${statistics.total_amount} HKD`, primary: true },
-    { label: "纳入统计笔数", value: `${statistics.transaction_count} 笔` },
+    { label: "纳入统计笔数", value: `${statistics.converted_transaction_count} 笔` },
     { label: "有流水天数", value: `${statistics.active_day_count} / ${statistics.range_day_count} 天` },
-    { label: "单笔均值", value: `${statistics.mean_amount} HKD` },
-    { label: "中位数", value: `${statistics.median_amount} HKD` },
-    { label: "最小 / 最大", value: `${statistics.minimum_amount} / ${statistics.maximum_amount} HKD` },
-    { label: "总体标准差", value: `${statistics.population_standard_deviation} HKD` },
-    { label: "总体方差", value: `${statistics.population_variance} HKD^2` },
+    { label: "范围日均", value: `${statistics.calendar_day_mean} HKD` },
+    { label: "有流水日均", value: `${statistics.active_day_mean} HKD` },
+    { label: "每日中位数", value: `${statistics.median_daily_amount} HKD` },
+    { label: "每日最小 / 最大", value: `${statistics.minimum_daily_amount} / ${statistics.maximum_daily_amount} HKD` },
+    { label: "每日总体标准差", value: `${statistics.population_daily_standard_deviation} HKD` },
+    { label: "每日总体方差", value: `${statistics.population_daily_variance} HKD^2` },
     { label: "最高金额日", value: `${statistics.maximum_day_date} · ${statistics.maximum_day_amount} HKD` },
   ];
   for (const metric of metrics) {
@@ -850,6 +1003,7 @@ async function loadSearch(resetPage = false) {
   const data = await request(buildSearchPath());
   renderSearchResults(data.transactions);
   updateSearchPagination(data.pagination);
+  renderTransactionSearchSummary(data.summary);
   state.search.loaded = true;
   updateViewVisibility();
   await loadTransactionAnalysis();

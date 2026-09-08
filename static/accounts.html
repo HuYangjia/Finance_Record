@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>个人财务账本 - 账户与流水</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260904-5">
+    <link rel="stylesheet" href="/static/styles.css?v=20260908-3">
   </head>
   <body>
     <header class="topbar">
@@ -191,6 +191,14 @@
             <button id="clear-search-filters" class="secondary-button" type="button">清除筛选</button>
           </div>
         </form>
+      </section>
+
+      <section id="transaction-search-summary-panel" class="transaction-search-summary-panel" data-detail-view="search" hidden aria-labelledby="transaction-search-summary-title">
+        <div class="section-heading">
+          <h2 id="transaction-search-summary-title">查询汇总</h2>
+          <span id="transaction-search-summary-meta"></span>
+        </div>
+        <div id="transaction-search-summary-content"></div>
       </section>
 
       <section id="search-results-panel" class="ledger-panel" data-detail-view="search" hidden aria-labelledby="search-results-title">
@@ -414,6 +422,6 @@
       </form>
     </dialog>
 
-    <script src="/static/accounts.js?v=20260904-5"></script>
+    <script src="/static/accounts.js?v=20260908-1"></script>
   </body>
 </html>

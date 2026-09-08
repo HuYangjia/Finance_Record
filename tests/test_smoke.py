@@ -342,6 +342,156 @@ class FinanceAppSmokeTest(unittest.TestCase):
             {"transfer", "fx_exchange"},
         )
 
+    def test_transaction_search_summary_uses_native_and_base_currencies(self):
+        accounts = {account["code"]: account for account in list_accounts()}
+        update_daily_cny_exchange_rate(
+            "2026-09-03",
+            DailyCnyRateUpdate(
+                usd_cny_rate="7.2",
+                hkd_cny_rate="0.9",
+                note="查询汇总测试汇率",
+            ),
+        )
+        create_expense(
+            ExpenseCreate(
+                transaction_date="2026-09-02",
+                source_account_id=accounts["CNY-BANK-01"]["id"],
+                amount="90",
+                category_id=self.food_category_id,
+            )
+        )
+        create_expense(
+            ExpenseCreate(
+                transaction_date="2026-09-03",
+                source_account_id=accounts["HKD-BANK-01"]["id"],
+                amount="20",
+                category_id=self.food_category_id,
+            )
+        )
+        create_income(
+            IncomeCreate(
+                transaction_date="2026-09-02",
+                destination_account_id=accounts["USD-BANK-01"]["id"],
+                amount="10",
+                category_id=self.salary_category_id,
+            )
+        )
+        create_transfer(
+            TransferCreate(
+                transaction_date="2026-09-02",
+                source_account_id=accounts["CNY-BANK-01"]["id"],
+                destination_account_id=accounts["CNY-CASH"]["id"],
+                outflow_amount="30",
+            )
+        )
+        create_transfer(
+            TransferCreate(
+                transaction_date="2026-09-03",
+                source_account_id=accounts["CNY-CASH"]["id"],
+                destination_account_id=accounts["HKD-BANK-01"]["id"],
+                outflow_amount="9",
+                inflow_amount="10",
+            )
+        )
+
+        result = search_transactions(
+            start_date="2026-09-02",
+            end_date="2026-09-03",
+            transaction_types=["income", "expense", "transfer", "fx_exchange"],
+        )
+        summary = result["summary"]
+        self.assertTrue(summary["available"])
+        self.assertEqual(summary["scope"]["mode"], "all_accounts")
+        self.assertEqual(summary["transaction_count"], 5)
+        self.assertEqual(result["pagination"]["total"], 5)
+        self.assertEqual(
+            {item["currency_code"]: item for item in summary["raw_totals_by_currency"]},
+            {
+                "CNY": {
+                    "currency_code": "CNY",
+                    "inflow_amount": "30.00",
+                    "outflow_amount": "129.00",
+                    "net_amount": "-99.00",
+                },
+                "HKD": {
+                    "currency_code": "HKD",
+                    "inflow_amount": "10.00",
+                    "outflow_amount": "20.00",
+                    "net_amount": "-10.00",
+                },
+                "USD": {
+                    "currency_code": "USD",
+                    "inflow_amount": "10.00",
+                    "outflow_amount": "0.00",
+                    "net_amount": "10.00",
+                },
+            },
+        )
+        valuations = {item["currency_code"]: item for item in summary["valuations"]}
+        self.assertEqual(valuations["CNY"]["inflow_amount"], "111.00")
+        self.assertEqual(valuations["CNY"]["outflow_amount"], "147.00")
+        self.assertEqual(valuations["CNY"]["net_amount"], "-36.00")
+        self.assertEqual(
+            valuations["CNY"]["rate_coverage"],
+            {
+                "direct_base_currency_leg_count": 4,
+                "exact_rate_leg_count": 2,
+                "nearest_rate_leg_count": 1,
+                "excluded_leg_count": 0,
+                "missing_currencies": [],
+            },
+        )
+        self.assertEqual(valuations["HKD"]["inflow_amount"], "123.33")
+        self.assertEqual(valuations["HKD"]["outflow_amount"], "163.33")
+        self.assertEqual(valuations["HKD"]["net_amount"], "-40.00")
+        self.assertEqual(
+            valuations["HKD"]["rate_coverage"],
+            {
+                "direct_base_currency_leg_count": 2,
+                "exact_rate_leg_count": 1,
+                "nearest_rate_leg_count": 4,
+                "excluded_leg_count": 0,
+                "missing_currencies": [],
+            },
+        )
+        by_type = {
+            item["transaction_type"]: item
+            for item in summary["by_type"]
+        }
+        self.assertEqual(by_type["expense"]["transaction_count"], 2)
+        self.assertEqual(by_type["transfer"]["transaction_count"], 1)
+        self.assertEqual(by_type["fx_exchange"]["transaction_count"], 1)
+        self.assertEqual(by_type["income"]["transaction_count"], 1)
+
+        account_summary = search_transactions(
+            account_id=accounts["CNY-BANK-01"]["id"],
+            start_date="2026-09-02",
+            end_date="2026-09-03",
+            transaction_types=["income", "expense", "transfer", "fx_exchange"],
+        )["summary"]
+        self.assertEqual(account_summary["scope"]["mode"], "selected_account")
+        self.assertEqual(account_summary["transaction_count"], 2)
+        self.assertEqual(
+            account_summary["raw_totals_by_currency"],
+            [
+                {
+                    "currency_code": "CNY",
+                    "inflow_amount": "0.00",
+                    "outflow_amount": "120.00",
+                    "net_amount": "-120.00",
+                }
+            ],
+        )
+        account_types = {
+            item["transaction_type"]: item
+            for item in account_summary["by_type"]
+        }
+        self.assertEqual(account_types["transfer"]["raw_totals_by_currency"][0]["inflow_amount"], "0.00")
+        self.assertEqual(account_types["transfer"]["raw_totals_by_currency"][0]["outflow_amount"], "30.00")
+
+        unavailable = search_transactions(start_date="2026-09-02")["summary"]
+        self.assertFalse(unavailable["available"])
+
     def test_corrections_backup_audit_and_adjustment(self):
         accounts = {account["code"]: account for account in list_accounts()}
         expense = create_expense(
@@ -462,7 +612,7 @@ class FinanceAppSmokeTest(unittest.TestCase):
         self.assertTrue({"update", "delete", "flag", "create", "reconcile"} <= audit_actions)
         self.assertGreaterEqual(len(list(database.BACKUP_DIR.glob("finance-*.db"))), 7)
 
-    def test_transaction_analysis_converts_main_amounts_to_hkd(self):
+    def test_transaction_analysis_aggregates_days_and_converts_to_hkd(self):
         accounts = {account["code"]: account for account in list_accounts()}
         update_daily_cny_exchange_rate(
             "2026-09-03",
@@ -522,8 +672,18 @@ class FinanceAppSmokeTest(unittest.TestCase):
         self.assertEqual(analysis["rate_coverage"]["nearest_rate_count"], 2)
         self.assertEqual(analysis["rate_coverage"]["excluded_count"], 0)
         self.assertEqual(analysis["statistics"]["total_amount"], "120.00")
-        self.assertEqual(analysis["statistics"]["transaction_count"], 4)
-        self.assertEqual(analysis["statistics"]["median_amount"], "15.00")
+        self.assertEqual(analysis["statistics"]["converted_transaction_count"], 4)
+        self.assertEqual(analysis["statistics"]["active_day_count"], 2)
+        self.assertEqual(analysis["statistics"]["calendar_day_mean"], "60.00")
+        self.assertEqual(analysis["statistics"]["active_day_mean"], "60.00")
+        self.assertEqual(analysis["statistics"]["median_daily_amount"], "60.00")
+        self.assertEqual(analysis["statistics"]["minimum_daily_amount"], "10.00")
+        self.assertEqual(analysis["statistics"]["maximum_daily_amount"], "110.00")
+        self.assertEqual(analysis["statistics"]["population_daily_variance"], "2500.0000")
+        self.assertEqual(
+            analysis["statistics"]["population_daily_standard_deviation"],
+            "50.00",
+        )
         self.assertEqual(analysis["statistics"]["maximum_day_date"], "2026-09-02")
         self.assertEqual(analysis["statistics"]["maximum_day_amount"], "110.00")
         self.assertEqual(
@@ -533,7 +693,21 @@ class FinanceAppSmokeTest(unittest.TestCase):
                 {"transaction_date": "2026-09-03", "amount": "10.00", "count": 1},
             ],
         )
-        self.assertEqual(sum(item["count"] for item in analysis["histogram"]), 4)
+        self.assertEqual(sum(item["count"] for item in analysis["histogram"]), 2)
+        self.assertTrue(
+            all(
+                isinstance(item["start"], int) and isinstance(item["end"], int)
+                for item in analysis["histogram"]
+            )
+        )
+        self.assertEqual(
+            analysis["weekday_distribution"][2],
+            {"weekday": 2, "label": "周三", "amount": "110.00", "active_day_count": 1},
+        )
+        self.assertEqual(
+            analysis["weekday_distribution"][3],
+            {"weekday": 3, "label": "周四", "amount": "10.00", "active_day_count": 1},
+        )
 
     def test_investment_valuation_recalculates_and_converts_base_currency(self):
         accounts = {account["code"]: account for account in list_accounts()}
