@@ -65,15 +65,19 @@ function formatTransactionAmounts(record) {
 
 function renderInternalMovements(records) {
   const body = document.querySelector("#internal-movements-body");
+  const details = document.querySelector("#internal-movements-details");
+  const summary = document.querySelector("#internal-movements-summary-label");
   body.replaceChildren();
 
   if (!records.length) {
-    const row = document.createElement("tr");
-    row.innerHTML = '<td colspan="5" class="empty-cell">本月暂无账户内资金流动</td>';
-    body.append(row);
+    details.hidden = true;
+    details.open = false;
     return;
   }
 
+  details.hidden = false;
+  details.open = false;
+  summary.textContent = `查看本月 ${records.length} 笔资金流动`;
   for (const record of records) {
     const row = document.createElement("tr");
     const values = [

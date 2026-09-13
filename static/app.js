@@ -34,14 +34,14 @@ const modeLabels = {
 const quickActions = {
   "octopus-food": {
     mode: "expense",
-    sourceAccountCode: "OCTOPUS-01",
+    sourceAccountCode: "OCTOPUS-STUDENT",
     categoryName: "餐饮",
     focus: expenseAmountInput,
   },
   "wechat-to-octopus": {
     mode: "transfer",
     sourceAccountCode: "WECHAT",
-    destinationAccountCode: "OCTOPUS-01",
+    destinationAccountCode: "OCTOPUS-STUDENT",
     focus: transferOutflowInput,
   },
   "alipay-daily-investment": {
@@ -95,7 +95,44 @@ function addOptions(select, records, placeholder) {
     const option = document.createElement("option");
     option.value = record.id;
     option.textContent = record.display_name || `${record.name} · ${record.currency_code}`;
+    option.dataset.activity = JSON.stringify(record.activity || {});
     select.append(option);
+  }
+}
+
+function setPickerRequired(select, required) {
+  window.setFrequentPickerRequired(select, required);
+}
+
+function refreshPickers() {
+  window.refreshFrequentPickers(form);
+}
+
+function initializeFrequentPickers() {
+  for (const select of [
+    expenseAccountSelect,
+    transferSourceSelect,
+    transferDestinationSelect,
+    incomeAccountSelect,
+  ]) {
+    window.createFrequentPicker(select, {
+      commonLabel: "常用账户",
+      otherLabel: "账户",
+      activityKey: select === expenseAccountSelect
+        ? "expense_source"
+        : select === transferSourceSelect
+          ? "movement_source"
+          : select === transferDestinationSelect
+            ? "movement_destination"
+            : "income_destination",
+    });
+  }
+  for (const select of [expenseCategorySelect, incomeCategorySelect]) {
+    window.createFrequentPicker(select, {
+      commonLabel: "常用分类",
+      otherLabel: "分类",
+      activityKey: "usage",
+    });
   }
 }
 
@@ -106,9 +143,16 @@ function setStatus(message, type = "") {
 
 function selectDefaultExpenseAccount() {
   const preferredAccount =
-    state.accounts.find((account) => account.code === "OCTOPUS-01") ||
+    state.accounts.find((account) => account.code === "OCTOPUS-STUDENT") ||
     state.accounts[0];
   expenseAccountSelect.value = preferredAccount ? String(preferredAccount.id) : "";
+}
+
+function selectDefaultExpenseCategory() {
+  const preferredCategory =
+    state.expenseCategories.find((category) => category.name === "餐饮") ||
+    state.expenseCategories[0];
+  expenseCategorySelect.value = preferredCategory ? String(preferredCategory.id) : "";
 }
 
 function setMode(mode) {
@@ -129,16 +173,19 @@ function setMode(mode) {
   }
 
   expenseAmountInput.required = mode === "expense";
-  expenseCategorySelect.required = mode === "expense";
   incomeAmountInput.required = mode === "income";
-  incomeCategorySelect.required = mode === "income";
   transferOutflowInput.required = mode === "transfer";
-  transferSourceSelect.required = mode === "transfer";
-  transferDestinationSelect.required = mode === "transfer";
+  setPickerRequired(expenseAccountSelect, mode === "expense");
+  setPickerRequired(expenseCategorySelect, mode === "expense");
+  setPickerRequired(incomeAccountSelect, mode === "income");
+  setPickerRequired(incomeCategorySelect, mode === "income");
+  setPickerRequired(transferSourceSelect, mode === "transfer");
+  setPickerRequired(transferDestinationSelect, mode === "transfer");
   counterpartyLabel.textContent = mode === "income" ? "来源或对象" : "商户或对象";
   submitButton.textContent = `保存${modeLabels[mode]}`;
 
   updateTransferAmounts();
+  refreshPickers();
   refreshSubmitState();
 }
 
@@ -249,16 +296,26 @@ function applyQuickAction(actionId) {
   }
 
   refreshSubmitState();
+  refreshPickers();
   action.focus.focus();
 }
 
-function resetTransactionForm() {
+function resetTransactionForm({ preserveExpenseAccount = false } = {}) {
+  const expenseAccountId = preserveExpenseAccount
+    ? expenseAccountSelect.value
+    : "";
   form.reset();
   dateInput.value = localDate();
   if (state.mode === "expense") {
-    selectDefaultExpenseAccount();
+    if (expenseAccountId) {
+      expenseAccountSelect.value = expenseAccountId;
+    } else {
+      selectDefaultExpenseAccount();
+    }
+    selectDefaultExpenseCategory();
   }
   updateTransferAmounts();
+  refreshPickers();
 }
 
 async function loadFormOptions() {
@@ -277,6 +334,7 @@ async function loadFormOptions() {
   addOptions(incomeAccountSelect, accounts, "选择到账账户");
   addOptions(expenseCategorySelect, expenseCategories, "选择支出分类");
   addOptions(incomeCategorySelect, incomeCategories, "选择收入分类");
+  initializeFrequentPickers();
 
   accountWarning.hidden = accounts.length > 0;
   resetTransactionForm();
@@ -352,7 +410,7 @@ transferOutflowInput.addEventListener("input", updateTransferAmounts);
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   setStatus("");
-  if (!form.reportValidity()) {
+  if (!window.validateFrequentPickers(form) || !form.reportValidity()) {
     return;
   }
 
@@ -368,7 +426,7 @@ form.addEventListener("submit", async (event) => {
     const amount = result.amount || result.outflow_amount;
     const currency = result.currency_code || result.source_currency_code;
     setStatus(`已记录 ${amount} ${currency}`, "success");
-    resetTransactionForm();
+    resetTransactionForm({ preserveExpenseAccount: state.mode === "expense" });
   } catch (error) {
     setStatus(error.message, "error");
   } finally {

@@ -11,7 +11,8 @@ const state = {
   view: "account",
   detail: { offset: 0, total: 0, loaded: false, account: null },
   search: { offset: 0, total: 0, loaded: false },
-  limit: 50,
+  detailLimit: 50,
+  searchLimit: 20,
 };
 
 const accountFilterPanel = document.querySelector(".account-filter-panel");
@@ -20,6 +21,7 @@ const accountSummaryPanel = document.querySelector("#account-summary-panel");
 const ledgerPanel = document.querySelector("#ledger-panel");
 const searchPanel = document.querySelector("#transaction-search-panel");
 const searchResultsPanel = document.querySelector("#search-results-panel");
+const searchResultsDetails = document.querySelector("#search-results-details");
 
 const detailForm = document.querySelector("#detail-filter-form");
 const detailAccountSelect = document.querySelector("#detail-account");
@@ -132,8 +134,39 @@ function setSelectOptions(select, records, placeholder, displayName, disabledPla
     const option = document.createElement("option");
     option.value = record.id;
     option.textContent = displayName(record);
+    option.dataset.activity = JSON.stringify(record.activity || {});
     select.append(option);
   }
+}
+
+function initializeFrequentPickers() {
+  for (const select of [
+    detailAccountSelect,
+    searchAccountSelect,
+    editorSourceSelect,
+    editorDestinationSelect,
+  ]) {
+    window.createFrequentPicker(select, {
+      commonLabel: "常用账户",
+      otherLabel: "账户",
+      activityKey: "overall",
+    });
+  }
+  for (const select of [detailCategorySelect, editorCategorySelect]) {
+    window.createFrequentPicker(select, {
+      commonLabel: "常用分类",
+      otherLabel: "分类",
+      activityKey: "usage",
+    });
+  }
+}
+
+function refreshPickers(root = document) {
+  window.refreshFrequentPickers(root);
+}
+
+function setPickerRequired(select, required) {
+  window.setFrequentPickerRequired(select, required);
 }
 
 function formatAccountName(account) {
@@ -197,14 +230,11 @@ async function setView(view) {
     button.setAttribute("aria-pressed", String(active));
   }
   updateViewVisibility();
-  if (view === "search" && !state.search.loaded) {
-    await loadSearch(true);
-  }
 }
 
 function buildDetailPath() {
   const parameters = new URLSearchParams({
-    limit: String(state.limit),
+    limit: String(state.detailLimit),
     offset: String(state.detail.offset),
   });
   if (detailStartDateInput.value) {
@@ -233,7 +263,7 @@ function buildDetailPath() {
 
 function buildSearchPath() {
   const parameters = new URLSearchParams({
-    limit: String(state.limit),
+    limit: String(state.searchLimit),
     offset: String(state.search.offset),
   });
   if (searchAccountSelect.value) {
@@ -599,10 +629,16 @@ function renderTransactionSearchSummary(summary) {
   );
   transactionSearchSummaryContent.append(combined);
 
-  const typeBreakdown = document.createElement("section");
-  typeBreakdown.className = "search-summary-block";
-  const typeHeading = document.createElement("h3");
-  typeHeading.textContent = "按流水类型";
+  if (summary.by_type.length <= 1) {
+    return;
+  }
+
+  const typeBreakdown = document.createElement("details");
+  typeBreakdown.className = "search-summary-block search-summary-breakdown";
+  const typeHeading = document.createElement("summary");
+  typeHeading.textContent = `按流水类型查看（${summary.by_type.map(
+    (item) => `${item.transaction_type_label} ${item.transaction_count} 笔`,
+  ).join("、")}）`;
   typeBreakdown.append(typeHeading);
   const types = document.createElement("div");
   types.className = "search-summary-type-list";
@@ -800,7 +836,7 @@ function renderAnalysisCalendar(data) {
         cell.addEventListener("click", () => {
           searchStartDateInput.value = dateValue;
           searchEndDateInput.value = dateValue;
-          loadSearch(true)
+          loadSearch(true, true)
             .then(() => searchResultsPanel.scrollIntoView({ behavior: "smooth", block: "start" }))
             .catch((error) => setStatus(searchStatus, error.message, "error"));
         });
@@ -873,8 +909,8 @@ function renderWeekdayDistribution(data) {
   return block;
 }
 
-function createDistributionTable(title, records, amountLabel) {
-  if (records.length <= 1) {
+function createDistributionTable(title, records, amountLabel, includeAmountShare = false) {
+  if (!records.length || (!includeAmountShare && records.length <= 1)) {
     return null;
   }
   const section = document.createElement("section");
@@ -883,7 +919,10 @@ function createDistributionTable(title, records, amountLabel) {
   const table = document.createElement("table");
   const head = document.createElement("thead");
   const headRow = document.createElement("tr");
-  for (const value of ["项目", amountLabel, "笔数"]) {
+  const headers = includeAmountShare
+    ? ["项目", amountLabel, "金额占比", "笔数"]
+    : ["项目", amountLabel, "笔数"];
+  for (const value of headers) {
     const cell = document.createElement("th");
     cell.textContent = value;
     headRow.append(cell);
@@ -892,7 +931,12 @@ function createDistributionTable(title, records, amountLabel) {
   const body = document.createElement("tbody");
   for (const record of records) {
     const row = document.createElement("tr");
-    appendCells(row, [record.name, `${record.amount} HKD`, `${record.count}`]);
+    const values = [record.name, `${record.amount} HKD`];
+    if (includeAmountShare) {
+      values.push(`${record.amount_share}%`);
+    }
+    values.push(`${record.count}`);
+    appendCells(row, values);
     body.append(row);
   }
   table.append(head, body);
@@ -958,7 +1002,12 @@ function renderTransactionAnalysis(data) {
   const distributionGrid = document.createElement("div");
   distributionGrid.className = "analysis-distribution-grid";
   const distributionSections = [
-    createDistributionTable("分类分布", data.category_distribution, "金额"),
+    createDistributionTable(
+      "分类分布",
+      data.category_distribution,
+      "金额",
+      true,
+    ),
     createDistributionTable(`${data.account_label}分布`, data.account_distribution, "金额"),
     createDistributionTable("调整方向分布", data.direction_distribution, "金额"),
   ].filter(Boolean);
@@ -995,7 +1044,7 @@ async function loadTransactionAnalysis() {
   }
 }
 
-async function loadSearch(resetPage = false) {
+async function loadSearch(resetPage = false, openResults = false) {
   if (resetPage) {
     state.search.offset = 0;
   }
@@ -1004,6 +1053,11 @@ async function loadSearch(resetPage = false) {
   renderSearchResults(data.transactions);
   updateSearchPagination(data.pagination);
   renderTransactionSearchSummary(data.summary);
+  if (resetPage && !openResults) {
+    searchResultsDetails.open = false;
+  } else if (openResults) {
+    searchResultsDetails.open = true;
+  }
   state.search.loaded = true;
   updateViewVisibility();
   await loadTransactionAnalysis();
@@ -1011,16 +1065,52 @@ async function loadSearch(resetPage = false) {
 
 function renderSearchCategoryOptions(categories) {
   searchCategoryOptions.replaceChildren();
-  for (const category of categories) {
-    const label = document.createElement("label");
-    const checkbox = document.createElement("input");
-    const text = document.createElement("span");
-    checkbox.type = "checkbox";
-    checkbox.value = category.id;
-    checkbox.addEventListener("change", updateCategorySummary);
-    text.textContent = formatCategoryName(category);
-    label.append(checkbox, text);
-    searchCategoryOptions.append(label);
+  const common = categories
+    .map((category, index) => ({ category, index }))
+    .filter((item) => item.category.activity?.record_count > 0)
+    .sort((left, right) => (
+      right.category.activity.record_count - left.category.activity.record_count
+      || (right.category.activity.last_transaction_date || "").localeCompare(
+        left.category.activity.last_transaction_date || "",
+      )
+      || left.index - right.index
+    ))
+    .slice(0, 6)
+    .map((item) => item.category);
+  const commonIds = new Set(common.map((category) => category.id));
+  const other = categories.filter((category) => !commonIds.has(category.id));
+
+  function appendOptions(records, target) {
+    for (const category of records) {
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      const text = document.createElement("span");
+      checkbox.type = "checkbox";
+      checkbox.value = category.id;
+      checkbox.addEventListener("change", updateCategorySummary);
+      text.textContent = formatCategoryName(category);
+      label.append(checkbox, text);
+      target.append(label);
+    }
+  }
+
+  if (common.length) {
+    const heading = document.createElement("p");
+    heading.className = "filter-option-group-label";
+    heading.textContent = "常用分类";
+    searchCategoryOptions.append(heading);
+    appendOptions(common, searchCategoryOptions);
+  }
+  if (other.length) {
+    const otherDetails = document.createElement("details");
+    otherDetails.className = "filter-option-other";
+    const summary = document.createElement("summary");
+    summary.textContent = `其他分类（${other.length}）`;
+    const options = document.createElement("div");
+    options.className = "filter-option-list";
+    appendOptions(other, options);
+    otherDetails.append(summary, options);
+    searchCategoryOptions.append(otherDetails);
   }
   updateCategorySummary();
 }
@@ -1036,6 +1126,8 @@ function setEditorCategoryOptions(kind, selectedId) {
   );
   editorCategorySelect.disabled = !kind;
   editorCategorySelect.value = selectedId ? String(selectedId) : "";
+  setPickerRequired(editorCategorySelect, Boolean(kind));
+  refreshPickers(editorDialog);
 }
 
 function updateEditorFieldState() {
@@ -1051,6 +1143,8 @@ function updateEditorFieldState() {
   editorInflowInput.disabled = isExpense;
   editorOutflowInput.required = isExpense || isMovement;
   editorInflowInput.required = isIncome || isMovement;
+  setPickerRequired(editorSourceSelect, isExpense || isMovement);
+  setPickerRequired(editorDestinationSelect, isIncome || isMovement);
   setEditorCategoryOptions(isIncome ? "income" : isExpense ? "expense" : null, editorCategorySelect.value);
 
   if (isIncome) {
@@ -1061,6 +1155,7 @@ function updateEditorFieldState() {
     editorDestinationSelect.value = "";
     editorInflowInput.value = "";
   }
+  refreshPickers(editorDialog);
 }
 
 async function openTransactionEditor(transactionId) {
@@ -1087,6 +1182,7 @@ async function openTransactionEditor(transactionId) {
     transaction.category_id,
   );
   updateEditorFieldState();
+  refreshPickers(editorDialog);
   openDialog(editorDialog);
 }
 
@@ -1208,12 +1304,14 @@ async function initialize() {
   setSelectOptions(detailCategorySelect, state.categories, "全部分类", formatCategoryName);
   setSelectOptions(editorSourceSelect, accounts, "无来源账户", formatAccountName);
   setSelectOptions(editorDestinationSelect, accounts, "无去向账户", formatAccountName);
+  initializeFrequentPickers();
   renderSearchCategoryOptions(state.categories);
 
   if (accounts.length) {
     detailAccountSelect.value = String(
       accounts.find((account) => account.is_active)?.id || accounts[0].id,
     );
+    refreshPickers();
     await loadDetail(true);
   }
   updateViewVisibility();
@@ -1248,19 +1346,20 @@ document.querySelector("#clear-detail-filters").addEventListener("click", () => 
   detailKeywordInput.value = "";
   detailAdjustmentOnlyInput.checked = false;
   detailFlaggedOnlyInput.checked = false;
+  refreshPickers(detailForm);
   loadDetail(true).catch((error) => setStatus(detailStatus, error.message, "error"));
 });
 
 previousDetailPageButton.addEventListener("click", () => {
-  state.detail.offset = Math.max(0, state.detail.offset - state.limit);
+  state.detail.offset = Math.max(0, state.detail.offset - state.detailLimit);
   loadDetail().catch((error) => setStatus(detailStatus, error.message, "error"));
 });
 
 nextDetailPageButton.addEventListener("click", () => {
-  if (state.detail.offset + state.limit >= state.detail.total) {
+  if (state.detail.offset + state.detailLimit >= state.detail.total) {
     return;
   }
-  state.detail.offset += state.limit;
+  state.detail.offset += state.detailLimit;
   loadDetail().catch((error) => setStatus(detailStatus, error.message, "error"));
 });
 
@@ -1283,27 +1382,28 @@ document.querySelector("#clear-search-filters").addEventListener("click", () => 
     checkbox.checked = false;
   }
   updateCategorySummary();
+  refreshPickers(searchForm);
   loadSearch(true).catch((error) => setStatus(searchStatus, error.message, "error"));
 });
 
 previousSearchPageButton.addEventListener("click", () => {
-  state.search.offset = Math.max(0, state.search.offset - state.limit);
-  loadSearch().catch((error) => setStatus(searchStatus, error.message, "error"));
+  state.search.offset = Math.max(0, state.search.offset - state.searchLimit);
+  loadSearch(false, true).catch((error) => setStatus(searchStatus, error.message, "error"));
 });
 
 nextSearchPageButton.addEventListener("click", () => {
-  if (state.search.offset + state.limit >= state.search.total) {
+  if (state.search.offset + state.searchLimit >= state.search.total) {
     return;
   }
-  state.search.offset += state.limit;
-  loadSearch().catch((error) => setStatus(searchStatus, error.message, "error"));
+  state.search.offset += state.searchLimit;
+  loadSearch(false, true).catch((error) => setStatus(searchStatus, error.message, "error"));
 });
 
 editorTypeSelect.addEventListener("change", updateEditorFieldState);
 
 editorForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!editorForm.reportValidity()) {
+  if (!window.validateFrequentPickers(editorForm) || !editorForm.reportValidity()) {
     return;
   }
   try {

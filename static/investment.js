@@ -1,6 +1,8 @@
 const state = {
   accounts: [],
   valuations: [],
+  monthlyLoaded: false,
+  fxLoaded: false,
 };
 
 const valuationForm = document.querySelector("#valuation-form");
@@ -21,8 +23,11 @@ const monthlyStatus = document.querySelector("#monthly-investment-status");
 const monthlyAccount = document.querySelector("#monthly-investment-account");
 const monthlyStart = document.querySelector("#monthly-investment-start");
 const monthlyEnd = document.querySelector("#monthly-investment-end");
+const monthlyInvestmentDetails = document.querySelector("#monthly-investment-details");
 
 const fxStatus = document.querySelector("#fx-status");
+const fxRateDetails = document.querySelector("#fx-rate-details");
+const fxRateDetailsSummary = document.querySelector("#fx-rate-details-summary");
 const manualFxForm = document.querySelector("#manual-fx-form");
 const manualFxDate = document.querySelector("#manual-fx-date");
 const manualUsdCny = document.querySelector("#manual-usd-cny");
@@ -243,6 +248,7 @@ async function loadMonthly() {
   }
   const data = await request(`/api/investments/monthly?${parameters.toString()}`);
   renderMonthly(data.results);
+  state.monthlyLoaded = true;
 }
 
 function renderFxRates(rows) {
@@ -269,10 +275,18 @@ function renderFxRates(rows) {
 async function loadFxRates() {
   const rows = await request("/api/fx-rates?limit=120");
   renderFxRates(rows);
+  state.fxLoaded = true;
+  fxRateDetailsSummary.textContent = rows.length
+    ? `每日汇率：最近快照 ${rows[0].rate_date}，已加载 ${rows.length} 条`
+    : "每日汇率：暂无快照";
 }
 
 async function refreshInvestmentData() {
-  await Promise.all([loadValuations(), loadPerformance(), loadMonthly()]);
+  const loaders = [loadValuations(), loadPerformance()];
+  if (state.monthlyLoaded) {
+    loaders.push(loadMonthly());
+  }
+  await Promise.all(loaders);
 }
 
 valuationForm.addEventListener("submit", async (event) => {
@@ -310,6 +324,18 @@ performanceForm.addEventListener("submit", (event) => {
 monthlyForm.addEventListener("submit", (event) => {
   event.preventDefault();
   loadMonthly().catch((error) => setStatus(monthlyStatus, error.message, "error"));
+});
+
+monthlyInvestmentDetails.addEventListener("toggle", () => {
+  if (monthlyInvestmentDetails.open && !state.monthlyLoaded) {
+    loadMonthly().catch((error) => setStatus(monthlyStatus, error.message, "error"));
+  }
+});
+
+fxRateDetails.addEventListener("toggle", () => {
+  if (fxRateDetails.open && !state.fxLoaded) {
+    loadFxRates().catch((error) => setStatus(fxStatus, error.message, "error"));
+  }
 });
 
 document.querySelector("#sync-fx-rates").addEventListener("click", async () => {
@@ -372,7 +398,7 @@ async function initialize() {
   monthlyStart.max = currentMonth;
   manualFxDate.value = today;
 
-  await Promise.all([loadValuations(), loadPerformance(), loadMonthly(), loadFxRates()]);
+  await Promise.all([loadValuations(), loadPerformance()]);
 }
 
 initialize().catch((error) => setStatus(valuationStatus, error.message, "error"));

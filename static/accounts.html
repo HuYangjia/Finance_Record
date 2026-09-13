@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>个人财务账本 - 账户与流水</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260908-3">
+    <link rel="stylesheet" href="/static/styles.css?v=20260908-5">
   </head>
   <body>
     <header class="topbar">
@@ -204,33 +204,35 @@
       <section id="search-results-panel" class="ledger-panel" data-detail-view="search" hidden aria-labelledby="search-results-title">
         <div class="section-heading">
           <h2 id="search-results-title">查询结果</h2>
-          <span id="search-summary"></span>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>日期</th>
-                <th>类型</th>
-                <th>资金路径</th>
-                <th>转出</th>
-                <th>转入</th>
-                <th>用途</th>
-                <th>备注</th>
-                <th>状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="search-results-body">
-              <tr><td colspan="9" class="empty-cell">暂无流水</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="pager" aria-label="查询结果分页">
-          <button id="previous-search-page" class="icon-button" type="button" aria-label="上一页" title="上一页">&#8592;</button>
-          <span id="search-page-label"></span>
-          <button id="next-search-page" class="icon-button" type="button" aria-label="下一页" title="下一页">&#8594;</button>
-        </div>
+        <details id="search-results-details" class="collapsible-details">
+          <summary id="search-summary">查询结果</summary>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>日期</th>
+                  <th>类型</th>
+                  <th>资金路径</th>
+                  <th>转出</th>
+                  <th>转入</th>
+                  <th>用途</th>
+                  <th>备注</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="search-results-body">
+                <tr><td colspan="9" class="empty-cell">暂无流水</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="pager" aria-label="查询结果分页">
+            <button id="previous-search-page" class="icon-button" type="button" aria-label="上一页" title="上一页">&#8592;</button>
+            <span id="search-page-label"></span>
+            <button id="next-search-page" class="icon-button" type="button" aria-label="下一页" title="下一页">&#8594;</button>
+          </div>
+        </details>
       </section>
 
       <section id="transaction-analysis-panel" class="transaction-analysis-panel" data-detail-view="search" hidden aria-labelledby="transaction-analysis-title">
@@ -422,6 +424,7 @@
       </form>
     </dialog>
 
-    <script src="/static/accounts.js?v=20260908-1"></script>
+    <script src="/static/frequent-picker.js?v=20260908-3"></script>
+    <script src="/static/accounts.js?v=20260908-3"></script>
   </body>
 </html>

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>个人财务账本 - 概况与查看</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260904-5">
+    <link rel="stylesheet" href="/static/styles.css?v=20260908-5">
   </head>
   <body>
     <header class="topbar">
@@ -57,22 +57,25 @@
           <span id="movement-month-label"></span>
         </div>
         <div id="internal-movement-summary" class="metric-grid"></div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>日期</th>
-                <th>类型</th>
-                <th>资金路径</th>
-                <th>金额</th>
-                <th>备注</th>
-              </tr>
-            </thead>
-            <tbody id="internal-movements-body">
-              <tr><td colspan="5" class="empty-cell">本月暂无账户内资金流动</td></tr>
-            </tbody>
-          </table>
-        </div>
+        <details id="internal-movements-details" class="collapsible-details" hidden>
+          <summary id="internal-movements-summary-label">查看本月资金流动</summary>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>日期</th>
+                  <th>类型</th>
+                  <th>资金路径</th>
+                  <th>金额</th>
+                  <th>备注</th>
+                </tr>
+              </thead>
+              <tbody id="internal-movements-body">
+                <tr><td colspan="5" class="empty-cell">本月暂无账户内资金流动</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
       </section>
 
       <section class="transactions-panel" aria-labelledby="transactions-title">
@@ -99,6 +102,6 @@
       </section>
     </main>
 
-    <script src="/static/overview.js?v=20260904-3"></script>
+    <script src="/static/overview.js?v=20260908-1"></script>
   </body>
 </html>
