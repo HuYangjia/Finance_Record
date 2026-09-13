@@ -61,6 +61,13 @@ FLAG_TYPE_LABELS = {
 INVESTMENT_ACCOUNT_TYPES = {"investment_asset", "broker_cash"}
 SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
 FX_RATE_SOURCE = "Frankfurter"
+FREQUENT_ACCOUNT_ACTIVITY_KEYS = (
+    "overall",
+    "expense_source",
+    "income_destination",
+    "movement_source",
+    "movement_destination",
+)
 
 
 def transaction_type_label(
@@ -79,6 +86,11 @@ async def lifespan(_: FastAPI):
         sync_daily_cny_exchange_rates(today_in_shanghai())
     except Exception as exc:
         print(f"汇率自动同步失败：{exc}")
+    try:
+        with connect() as connection:
+            ensure_daily_frequent_snapshot(connection, today_in_shanghai())
+    except Exception as exc:
+        print(f"常用项每日统计失败：{exc}")
     yield
 
 
@@ -1247,6 +1259,279 @@ def get_currency_decimal_places_for_row(row) -> int:
     return row["decimal_places"]
 
 
+def frequent_activity_start_date(snapshot_date: date) -> str:
+    return (snapshot_date - timedelta(days=89)).isoformat()
+
+
+def serialize_recent_activity(
+    record_count: int | None,
+    last_transaction_date: str | None,
+) -> dict[str, Any]:
+    return {
+        "record_count": int(record_count or 0),
+        "last_transaction_date": last_transaction_date,
+    }
+
+
+def empty_account_recent_activity() -> dict[str, dict[str, Any]]:
+    return {
+        key: serialize_recent_activity(0, None)
+        for key in FREQUENT_ACCOUNT_ACTIVITY_KEYS
+    }
+
+
+def list_account_recent_activity(connection, start_date: str) -> dict[int, dict[str, Any]]:
+    rows = connection.execute(
+        """
+        WITH account_legs AS (
+            SELECT
+                source_account_id AS account_id,
+                transaction_type,
+                transaction_date,
+                'source' AS leg_direction
+            FROM transactions
+            WHERE source_account_id IS NOT NULL
+              AND transaction_date >= ?
+
+            UNION ALL
+
+            SELECT
+                destination_account_id AS account_id,
+                transaction_type,
+                transaction_date,
+                'destination' AS leg_direction
+            FROM transactions
+            WHERE destination_account_id IS NOT NULL
+              AND transaction_date >= ?
+        )
+        SELECT
+            account_id,
+            COUNT(*) AS overall_record_count,
+            MAX(transaction_date) AS overall_last_transaction_date,
+            SUM(CASE
+                WHEN transaction_type = 'expense'
+                 AND leg_direction = 'source'
+                THEN 1 ELSE 0
+            END) AS expense_source_record_count,
+            MAX(CASE
+                WHEN transaction_type = 'expense'
+                 AND leg_direction = 'source'
+                THEN transaction_date
+            END) AS expense_source_last_transaction_date,
+            SUM(CASE
+                WHEN transaction_type = 'income'
+                 AND leg_direction = 'destination'
+                THEN 1 ELSE 0
+            END) AS income_destination_record_count,
+            MAX(CASE
+                WHEN transaction_type = 'income'
+                 AND leg_direction = 'destination'
+                THEN transaction_date
+            END) AS income_destination_last_transaction_date,
+            SUM(CASE
+                WHEN transaction_type IN (
+                    'transfer',
+                    'fx_exchange',
+                    'broker_deposit',
+                    'broker_withdrawal'
+                )
+                 AND leg_direction = 'source'
+                THEN 1 ELSE 0
+            END) AS movement_source_record_count,
+            MAX(CASE
+                WHEN transaction_type IN (
+                    'transfer',
+                    'fx_exchange',
+                    'broker_deposit',
+                    'broker_withdrawal'
+                )
+                 AND leg_direction = 'source'
+                THEN transaction_date
+            END) AS movement_source_last_transaction_date,
+            SUM(CASE
+                WHEN transaction_type IN (
+                    'transfer',
+                    'fx_exchange',
+                    'broker_deposit',
+                    'broker_withdrawal'
+                )
+                 AND leg_direction = 'destination'
+                THEN 1 ELSE 0
+            END) AS movement_destination_record_count,
+            MAX(CASE
+                WHEN transaction_type IN (
+                    'transfer',
+                    'fx_exchange',
+                    'broker_deposit',
+                    'broker_withdrawal'
+                )
+                 AND leg_direction = 'destination'
+                THEN transaction_date
+            END) AS movement_destination_last_transaction_date
+        FROM account_legs
+        GROUP BY account_id
+        """,
+        (start_date, start_date),
+    ).fetchall()
+    return {
+        row["account_id"]: {
+            "overall": serialize_recent_activity(
+                row["overall_record_count"],
+                row["overall_last_transaction_date"],
+            ),
+            "expense_source": serialize_recent_activity(
+                row["expense_source_record_count"],
+                row["expense_source_last_transaction_date"],
+            ),
+            "income_destination": serialize_recent_activity(
+                row["income_destination_record_count"],
+                row["income_destination_last_transaction_date"],
+            ),
+            "movement_source": serialize_recent_activity(
+                row["movement_source_record_count"],
+                row["movement_source_last_transaction_date"],
+            ),
+            "movement_destination": serialize_recent_activity(
+                row["movement_destination_record_count"],
+                row["movement_destination_last_transaction_date"],
+            ),
+        }
+        for row in rows
+    }
+
+
+def list_category_recent_activity(connection, start_date: str) -> dict[int, dict[str, Any]]:
+    rows = connection.execute(
+        """
+        SELECT
+            category_id,
+            COUNT(*) AS record_count,
+            MAX(transaction_date) AS last_transaction_date
+        FROM transactions
+        WHERE category_id IS NOT NULL
+          AND transaction_date >= ?
+        GROUP BY category_id
+        """,
+        (start_date,),
+    ).fetchall()
+    return {
+        row["category_id"]: serialize_recent_activity(
+            row["record_count"],
+            row["last_transaction_date"],
+        )
+        for row in rows
+    }
+
+
+def ensure_daily_frequent_snapshot(connection, snapshot_date: date) -> None:
+    snapshot_date_text = snapshot_date.isoformat()
+    connection.execute("BEGIN IMMEDIATE")
+    existing = connection.execute(
+        """
+        SELECT 1
+        FROM daily_frequent_snapshots
+        WHERE snapshot_date = ?
+        """,
+        (snapshot_date_text,),
+    ).fetchone()
+    if existing is not None:
+        return
+
+    start_date = frequent_activity_start_date(snapshot_date)
+    account_activity = list_account_recent_activity(connection, start_date)
+    category_activity = list_category_recent_activity(connection, start_date)
+
+    connection.execute(
+        "INSERT INTO daily_frequent_snapshots (snapshot_date) VALUES (?)",
+        (snapshot_date_text,),
+    )
+    account_rows = [
+        (
+            snapshot_date_text,
+            account_id,
+            activity_key,
+            activity["record_count"],
+            activity["last_transaction_date"],
+        )
+        for account_id, activity_by_key in account_activity.items()
+        for activity_key, activity in activity_by_key.items()
+        if activity["record_count"] > 0
+    ]
+    if account_rows:
+        connection.executemany(
+            """
+            INSERT INTO daily_account_frequent_activity (
+                snapshot_date, account_id, activity_key,
+                record_count, last_transaction_date
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            account_rows,
+        )
+
+    category_rows = [
+        (
+            snapshot_date_text,
+            category_id,
+            activity["record_count"],
+            activity["last_transaction_date"],
+        )
+        for category_id, activity in category_activity.items()
+        if activity["record_count"] > 0
+    ]
+    if category_rows:
+        connection.executemany(
+            """
+            INSERT INTO daily_category_frequent_activity (
+                snapshot_date, category_id, record_count, last_transaction_date
+            ) VALUES (?, ?, ?, ?)
+            """,
+            category_rows,
+        )
+
+
+def list_daily_account_frequent_activity(
+    connection,
+    snapshot_date: str,
+) -> dict[int, dict[str, dict[str, Any]]]:
+    rows = connection.execute(
+        """
+        SELECT account_id, activity_key, record_count, last_transaction_date
+        FROM daily_account_frequent_activity
+        WHERE snapshot_date = ?
+        """,
+        (snapshot_date,),
+    ).fetchall()
+    result: dict[int, dict[str, dict[str, Any]]] = {}
+    for row in rows:
+        activity = result.setdefault(row["account_id"], empty_account_recent_activity())
+        activity[row["activity_key"]] = serialize_recent_activity(
+            row["record_count"],
+            row["last_transaction_date"],
+        )
+    return result
+
+
+def list_daily_category_frequent_activity(
+    connection,
+    snapshot_date: str,
+) -> dict[int, dict[str, Any]]:
+    rows = connection.execute(
+        """
+        SELECT category_id, record_count, last_transaction_date
+        FROM daily_category_frequent_activity
+        WHERE snapshot_date = ?
+        """,
+        (snapshot_date,),
+    ).fetchall()
+    return {
+        row["category_id"]: serialize_recent_activity(
+            row["record_count"],
+            row["last_transaction_date"],
+        )
+        for row in rows
+    }
+
+
 @app.get("/", include_in_schema=False)
 def index():
     return FileResponse(STATIC_DIR / "index.html")
@@ -1274,7 +1559,9 @@ def health():
 
 @app.get("/api/accounts")
 def list_accounts(include_inactive: bool = False):
+    snapshot_date = today_in_shanghai().isoformat()
     with connect() as connection:
+        ensure_daily_frequent_snapshot(connection, date.fromisoformat(snapshot_date))
         active_clause = "" if include_inactive else "WHERE account_balances.is_active = 1"
         rows = connection.execute(
             f"""
@@ -1282,10 +1569,22 @@ def list_accounts(include_inactive: bool = False):
             FROM account_balances
             JOIN currencies ON currencies.code = account_balances.currency_code
             {active_clause}
-            ORDER BY account_balances.currency_code, account_balances.account_class, account_balances.name
+            ORDER BY account_balances.currency_code,
+                     account_balances.account_class,
+                     account_balances.name
             """,
         ).fetchall()
-    return [serialize_account(row) for row in rows]
+        recent_activity = list_daily_account_frequent_activity(
+            connection,
+            snapshot_date,
+        )
+    result = [serialize_account(row) for row in rows]
+    for account in result:
+        account["activity"] = recent_activity.get(
+            account["id"],
+            empty_account_recent_activity(),
+        )
+    return result
 
 
 def account_detail_direction(transaction_type: str, is_source: bool) -> str:
@@ -2318,7 +2617,9 @@ def list_categories(
     kind: str = Query(pattern="^(income|expense)$"),
     include_inactive: bool = False,
 ):
+    snapshot_date = today_in_shanghai().isoformat()
     with connect() as connection:
+        ensure_daily_frequent_snapshot(connection, date.fromisoformat(snapshot_date))
         rows = connection.execute(
             """
             SELECT parent.id AS parent_id, parent.name AS parent_name,
@@ -2332,10 +2633,17 @@ def list_categories(
                   WHERE nested.parent_id = child.id
                     AND (? = 1 OR nested.is_active = 1)
               )
-            ORDER BY COALESCE(parent.sort_order, child.sort_order), parent.name, child.sort_order, child.name
+            ORDER BY COALESCE(parent.sort_order, child.sort_order),
+                     parent.name,
+                     child.sort_order,
+                     child.name
             """,
             (kind, int(include_inactive), int(include_inactive)),
         ).fetchall()
+        recent_activity = list_daily_category_frequent_activity(
+            connection,
+            snapshot_date,
+        )
     return [
         {
             "id": row["id"],
@@ -2344,6 +2652,10 @@ def list_categories(
             "parent_id": row["parent_id"],
             "parent_name": row["parent_name"],
             "is_active": bool(row["is_active"]),
+            "activity": recent_activity.get(
+                row["id"],
+                serialize_recent_activity(0, None),
+            ),
             "display_name": f"{row['parent_name']} / {row['name']}"
             if row["parent_name"]
             else row["name"],
@@ -3431,12 +3743,29 @@ def build_transaction_analysis(
             "maximum_day_amount": format_decimal(maximum_day["amount"], 2),
         }
 
-    def serialize_distribution(items: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    def serialize_distribution(
+        items: dict[str, dict[str, Any]],
+        include_amount_share: bool = False,
+    ) -> list[dict[str, Any]]:
+        total_amount = sum(
+            (values["amount"] for values in items.values()),
+            Decimal(0),
+        )
         return [
             {
                 "name": name,
                 "amount": format_decimal(values["amount"], 2),
                 "count": values["count"],
+                **(
+                    {
+                        "amount_share": format_decimal(
+                            values["amount"] * Decimal(100) / total_amount,
+                            1,
+                        ),
+                    }
+                    if include_amount_share and total_amount
+                    else {}
+                ),
             }
             for name, values in sorted(
                 items.items(),
@@ -3477,7 +3806,10 @@ def build_transaction_analysis(
             }
             for item in weekday_totals
         ],
-        "category_distribution": serialize_distribution(category_totals),
+        "category_distribution": serialize_distribution(
+            category_totals,
+            include_amount_share=True,
+        ),
         "account_distribution": serialize_distribution(account_totals),
         "direction_distribution": serialize_distribution(direction_totals),
     }

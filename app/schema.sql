@@ -246,6 +246,46 @@ CREATE TABLE IF NOT EXISTS daily_cny_exchange_rates (
 CREATE INDEX IF NOT EXISTS daily_cny_exchange_rates_date_index
     ON daily_cny_exchange_rates(rate_date DESC);
 
+CREATE TABLE IF NOT EXISTS daily_frequent_snapshots (
+    snapshot_date TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS daily_account_frequent_activity (
+    snapshot_date TEXT NOT NULL
+        REFERENCES daily_frequent_snapshots(snapshot_date) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    activity_key TEXT NOT NULL CHECK (
+        activity_key IN (
+            'overall',
+            'expense_source',
+            'income_destination',
+            'movement_source',
+            'movement_destination'
+        )
+    ),
+    record_count INTEGER NOT NULL CHECK (record_count > 0),
+    last_transaction_date TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (snapshot_date, account_id, activity_key)
+);
+
+CREATE INDEX IF NOT EXISTS daily_account_frequent_activity_date_index
+    ON daily_account_frequent_activity(snapshot_date DESC, account_id);
+
+CREATE TABLE IF NOT EXISTS daily_category_frequent_activity (
+    snapshot_date TEXT NOT NULL
+        REFERENCES daily_frequent_snapshots(snapshot_date) ON DELETE CASCADE,
+    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    record_count INTEGER NOT NULL CHECK (record_count > 0),
+    last_transaction_date TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (snapshot_date, category_id)
+);
+
+CREATE INDEX IF NOT EXISTS daily_category_frequent_activity_date_index
+    ON daily_category_frequent_activity(snapshot_date DESC, category_id);
+
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,

@@ -31,6 +31,7 @@ from app.main import (
     delete_transaction,
     get_transaction,
     list_accounts,
+    list_categories,
     list_transactions,
     investment_monthly,
     investment_performance,
@@ -185,6 +186,133 @@ class FinanceAppSmokeTest(unittest.TestCase):
         self.assertEqual(food_category["sort_order"], 25)
         self.assertIsNotNone(payroll_category)
         self.assertEqual(payroll_category["sort_order"], 95)
+
+    def test_daily_snapshot_drives_account_and_category_common_data(self):
+        with database.connect() as connection:
+            accounts = {
+                row["code"]: {"id": row["id"]}
+                for row in connection.execute("SELECT id, code FROM accounts")
+            }
+
+        with patch("app.main.today_in_shanghai", return_value=date(2026, 9, 8)):
+            create_expense(
+                ExpenseCreate(
+                    transaction_date="2026-09-07",
+                    source_account_id=accounts["CNY-BANK-01"]["id"],
+                    amount="10",
+                    category_id=self.food_category_id,
+                )
+            )
+            create_expense(
+                ExpenseCreate(
+                    transaction_date="2026-09-08",
+                    source_account_id=accounts["CNY-BANK-01"]["id"],
+                    amount="12",
+                    category_id=self.food_category_id,
+                )
+            )
+            create_expense(
+                ExpenseCreate(
+                    transaction_date="2026-09-08",
+                    source_account_id=accounts["HKD-BANK-01"]["id"],
+                    amount="20",
+                    category_id=self.food_category_id,
+                )
+            )
+            create_income(
+                IncomeCreate(
+                    transaction_date="2026-09-08",
+                    destination_account_id=accounts["CNY-BANK-01"]["id"],
+                    amount="100",
+                    category_id=self.salary_category_id,
+                )
+            )
+            create_transfer(
+                TransferCreate(
+                    transaction_date="2026-09-08",
+                    source_account_id=accounts["CNY-BANK-01"]["id"],
+                    destination_account_id=accounts["CNY-CASH"]["id"],
+                    outflow_amount="30",
+                )
+            )
+
+            account_activity = {
+                account["code"]: account["activity"]
+                for account in list_accounts()
+            }
+            self.assertEqual(
+                account_activity["CNY-BANK-01"]["expense_source"],
+                {"record_count": 2, "last_transaction_date": "2026-09-08"},
+            )
+            self.assertEqual(
+                account_activity["CNY-BANK-01"]["income_destination"],
+                {"record_count": 1, "last_transaction_date": "2026-09-08"},
+            )
+            self.assertEqual(
+                account_activity["CNY-BANK-01"]["movement_source"],
+                {"record_count": 1, "last_transaction_date": "2026-09-08"},
+            )
+            self.assertEqual(
+                account_activity["CNY-CASH"]["movement_destination"],
+                {"record_count": 1, "last_transaction_date": "2026-09-08"},
+            )
+
+            categories = {
+                category["name"]: category["activity"]
+                for category in list_categories(kind="expense")
+            }
+            self.assertEqual(
+                categories["餐饮"],
+                {"record_count": 3, "last_transaction_date": "2026-09-08"},
+            )
+
+            create_expense(
+                ExpenseCreate(
+                    transaction_date="2026-09-08",
+                    source_account_id=accounts["CNY-CASH"]["id"],
+                    amount="8",
+                    category_id=self.food_category_id,
+                )
+            )
+            frozen_accounts = {
+                account["code"]: account["activity"]
+                for account in list_accounts()
+            }
+            frozen_categories = {
+                category["name"]: category["activity"]
+                for category in list_categories(kind="expense")
+            }
+            self.assertEqual(
+                frozen_accounts["CNY-CASH"]["expense_source"],
+                {"record_count": 0, "last_transaction_date": None},
+            )
+            self.assertEqual(
+                frozen_categories["餐饮"],
+                {"record_count": 3, "last_transaction_date": "2026-09-08"},
+            )
+
+        with patch("app.main.today_in_shanghai", return_value=date(2026, 9, 9)):
+            next_day_accounts = {
+                account["code"]: account["activity"]
+                for account in list_accounts()
+            }
+            next_day_categories = {
+                category["name"]: category["activity"]
+                for category in list_categories(kind="expense")
+            }
+        self.assertEqual(
+            next_day_accounts["CNY-CASH"]["expense_source"],
+            {"record_count": 1, "last_transaction_date": "2026-09-08"},
+        )
+        self.assertEqual(
+            next_day_categories["餐饮"],
+            {"record_count": 4, "last_transaction_date": "2026-09-08"},
+        )
+        with database.connect() as connection:
+            snapshot_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM daily_frequent_snapshots"
+            ).fetchone()["count"]
+        self.assertEqual(snapshot_count, 2)
 
     def test_payroll_expense_category_creates_expense(self):
         accounts = {account["code"]: account for account in list_accounts()}
@@ -707,6 +835,10 @@ class FinanceAppSmokeTest(unittest.TestCase):
         self.assertEqual(
             analysis["weekday_distribution"][3],
             {"weekday": 3, "label": "周四", "amount": "10.00", "active_day_count": 1},
+        )
+        self.assertEqual(
+            analysis["category_distribution"],
+            [{"name": "餐饮", "amount": "120.00", "count": 4, "amount_share": "100.0"}],
         )
 
     def test_investment_valuation_recalculates_and_converts_base_currency(self):
