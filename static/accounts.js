@@ -1,3 +1,30 @@
+const basisSelect = document.querySelector('#cashflow-basis');
+try {
+  const saved = localStorage.getItem('finance-accounts-basis');
+  if (basisSelect) basisSelect.value = ['offset', 'groups'].includes(saved) ? saved : 'raw';
+} catch (_) {}
+const isOffsetBasis = () => Boolean(basisSelect && basisSelect.value !== 'raw');
+let searchRequestId = 0;
+function updateBasisDescription() {
+  const description = document.querySelector('#basis-description');
+  if (description) description.textContent = isOffsetBasis()
+    ? '事项日期取最早原始流水，分类继承最早主流水。涉及账户命中后保留完整事项及其他日期的回款。'
+    : '按原始流水日期、类型和账户资金流查询。';
+  const label = document.querySelector('#search-account').closest('label').querySelector('span');
+  if (label) label.textContent = isOffsetBasis() ? '涉及账户' : '账户';
+}
+basisSelect?.addEventListener('change', () => {
+  try { localStorage.setItem('finance-accounts-basis', basisSelect.value); } catch (_) {}
+  updateBasisDescription();
+  loadSearch(true).catch(error => setStatus(searchStatus, error.message, 'error'));
+});
+// Older cached HTML must not prevent the basic ledger from initializing.
+const primaryNavigation = document.querySelector('.primary-nav');
+if (primaryNavigation && !primaryNavigation.querySelector('a[href="/offsets"]')) {
+  const link = document.createElement('a');
+  link.href = '/offsets'; link.className = 'nav-link'; link.textContent = '冲销与代收代付';
+  primaryNavigation.append(link);
+}
 const FLAG_LABELS = {
   suspected_duplicate: "疑似重复",
   missing_information: "信息不完整",
@@ -37,6 +64,27 @@ const previousDetailPageButton = document.querySelector("#previous-page");
 const nextDetailPageButton = document.querySelector("#next-page");
 
 const searchForm = document.querySelector("#transaction-search-form");
+const searchBudgetSelect = document.querySelector('#search-budget-system');
+const editorBudgetSelect = document.querySelector('#editor-budget-system');
+let budgetConfig = null;
+
+async function loadBudgetFilters() {
+  try {
+    budgetConfig=await request('/api/budget/config');
+    const dailyHint=document.querySelector('#daily-budget-hint');
+    if(dailyHint)dailyHint.textContent=`未单独指定预算的支出，自动计入「${budgetConfig.systems.find(s=>s.id===budgetConfig.daily_expense)?.name||'日常预算'}」，包含历史消费。`;
+    if(searchBudgetSelect)for(const system of budgetConfig.systems){const option=document.createElement('option');option.value=system.id;option.textContent=system.name+(system.is_active?'':'（停用）');searchBudgetSelect.append(option);}
+  } catch(e) {
+    const warning=document.querySelector('#budget-query-warning');
+    if(warning){warning.textContent='预算选项加载失败，请刷新重试。账户与分类查询仍可使用。';warning.hidden=false;}
+  }
+}
+
+function renderBudgetWarnings(data) {
+  const warning=document.querySelector('#budget-query-warning');if(!warning||!budgetConfig)return;
+  warning.replaceChildren();const rows=data.budget_warnings||[];warning.hidden=!rows.length;
+  if(rows.length){warning.append(document.createTextNode(`以下 ${rows.length} 个跨预算事项尚未归属，未计入当前预算的冲销后汇总和图表：`));for(const row of rows){const a=document.createElement('a');a.href=`/offsets?group=${row.id}`;a.textContent=` ${row.title} `;warning.append(a);}warning.append(document.createTextNode('。可查看全部预算下的完整净额，或统一事项主流水的预算归属后重查。'));}
+}
 const searchAccountSelect = document.querySelector("#search-account");
 const searchStartDateInput = document.querySelector("#search-start-date");
 const searchEndDateInput = document.querySelector("#search-end-date");
@@ -179,6 +227,44 @@ function formatCategoryName(category) {
   return `${category.display_name}${inactiveLabel}`;
 }
 
+function compareAccountsByPriority(left, right) {
+  const leftActivity = left.activity?.overall || {};
+  const rightActivity = right.activity?.overall || {};
+  const leftRecordCount = Number(leftActivity.record_count) || 0;
+  const rightRecordCount = Number(rightActivity.record_count) || 0;
+  const leftRecentCount = Number(leftActivity.recent_record_count);
+  const rightRecentCount = Number(rightActivity.recent_record_count);
+  const leftTier = Number.isFinite(leftRecentCount)
+    ? leftRecentCount > 0
+      ? 2
+      : leftRecordCount > 0
+        ? 1
+        : 0
+    : leftRecordCount > 0
+      ? 1
+      : 0;
+  const rightTier = Number.isFinite(rightRecentCount)
+    ? rightRecentCount > 0
+      ? 2
+      : rightRecordCount > 0
+        ? 1
+        : 0
+    : rightRecordCount > 0
+      ? 1
+      : 0;
+  const leftPriorityCount = leftTier === 2 ? leftRecentCount : leftRecordCount;
+  const rightPriorityCount = rightTier === 2 ? rightRecentCount : rightRecordCount;
+
+  return (
+    rightTier - leftTier
+    || rightPriorityCount - leftPriorityCount
+    || (rightActivity.last_transaction_date || "").localeCompare(
+      leftActivity.last_transaction_date || "",
+    )
+    || left.name.localeCompare(right.name, "zh-CN")
+  );
+}
+
 function selectedDetailAccountId() {
   return Number(detailAccountSelect.value);
 }
@@ -266,8 +352,9 @@ function buildSearchPath() {
     limit: String(state.searchLimit),
     offset: String(state.search.offset),
   });
+  if(searchBudgetSelect?.value)parameters.set('budget_system_id',searchBudgetSelect.value);
   if (searchAccountSelect.value) {
-    parameters.set("account_id", searchAccountSelect.value);
+    parameters.set(isOffsetBasis() ? "involved_account_id" : "account_id", searchAccountSelect.value);
   }
   if (searchStartDateInput.value) {
     parameters.set("start_date", searchStartDateInput.value);
@@ -290,12 +377,16 @@ function buildSearchPath() {
   if (searchFlaggedOnlyInput.checked) {
     parameters.set("flagged_only", "true");
   }
-  return `/api/transactions/search?${parameters.toString()}`;
+  if (basisSelect?.value === "groups") parameters.set("entry_type", "offset_group");
+  return `${isOffsetBasis() ? "/api/personal-cashflow/search" : "/api/transactions/search"}?${parameters.toString()}`;
 }
 
 function createStatusBadges(record) {
   const target = document.createElement("div");
   target.className = "status-badges";
+  if(['expense','income'].includes(record.transaction_type)){
+    const badge=document.createElement('span');badge.className='status-badge budget-badge';badge.textContent=(record.effective_budget_system_name||record.budget_system_name||'未归属预算')+(record.budget_inherited?' · 自动':'');target.append(badge);
+  }
   if (record.is_manual_adjustment) {
     const badge = document.createElement("span");
     badge.className = "status-badge adjustment-badge";
@@ -314,6 +405,12 @@ function createStatusBadges(record) {
     badge.title = record.flag.note;
     badge.textContent = FLAG_LABELS[record.flag.flag_type] || "待核实";
     target.append(badge);
+  }
+  if (record.offset_group_id) {
+    const link = document.createElement('a');
+    link.href = `/offsets?group=${record.offset_group_id}`;
+    link.textContent = record.offset_group_title || `冲销事项 #${record.offset_group_id}`;
+    target.append(link);
   }
   if (!target.childElementCount) {
     target.textContent = "-";
@@ -576,6 +673,13 @@ function createSummaryFlowTable(records, currencyLabel, includeCoverage = false)
     }
     const row = document.createElement("tr");
     appendCells(row, values);
+    if (isOffsetBasis()) {
+      const magnitude = Math.max(1, ...records.map(item => Math.abs(Number(item.amount))));
+      const track = document.createElement('div'); track.className='signed-track';
+      const bar = document.createElement('span'); const number=Number(record.amount);
+      bar.className=number < 0 ? 'signed-bar negative' : 'signed-bar positive';
+      bar.style.width=`${Math.abs(number)/magnitude*50}%`; track.append(bar);row.children[1].append(track);
+    }
     body.append(row);
   }
   table.append(head, body);
@@ -711,8 +815,9 @@ function buildAnalysisPath() {
     end_date: searchEndDateInput.value,
     transaction_type: selectedSearchTypes()[0],
   });
+  if(searchBudgetSelect?.value)parameters.set('budget_system_id',searchBudgetSelect.value);
   if (searchAccountSelect.value) {
-    parameters.set("account_id", searchAccountSelect.value);
+    parameters.set(isOffsetBasis() ? "involved_account_id" : "account_id", searchAccountSelect.value);
   }
   for (const categoryId of selectedSearchCategories()) {
     parameters.append("category_ids", categoryId);
@@ -726,7 +831,8 @@ function buildAnalysisPath() {
   if (searchFlaggedOnlyInput.checked) {
     parameters.set("flagged_only", "true");
   }
-  return `/api/transactions/analysis?${parameters.toString()}`;
+  if (basisSelect?.value === "groups") parameters.set("entry_type", "offset_group");
+  return `${isOffsetBasis() ? "/api/personal-cashflow/analysis" : "/api/transactions/analysis"}?${parameters.toString()}`;
 }
 
 function createAnalysisBlock(title) {
@@ -783,7 +889,7 @@ function isoDate(year, month, day) {
 function renderAnalysisCalendar(data) {
   const block = createAnalysisBlock("按日历查看");
   block.append(createAnalysisSummary(
-    `按${data.main_amount_label}汇总，金额已统一换算为 HKD；点击有金额的日期可查看当天逐笔流水。`,
+    `按${data.main_amount_label}汇总，金额已统一换算为 HKD；点击日期查看${data.basis === "offset" ? "归属当天的统计记录，再展开原始流水" : "当天逐笔流水"}。`,
   ));
   const dayTotals = new Map(
     data.daily_totals.map((item) => [item.transaction_date, item]),
@@ -831,7 +937,7 @@ function renderAnalysisCalendar(data) {
         const amount = document.createElement("strong");
         amount.textContent = `${daily.amount} HKD`;
         const count = document.createElement("small");
-        count.textContent = `${daily.count} 笔`;
+        count.textContent = `${daily.count} ${data.basis === "offset" ? "条" : "笔"}`;
         cell.append(amount, count);
         cell.addEventListener("click", () => {
           searchStartDateInput.value = dateValue;
@@ -933,10 +1039,17 @@ function createDistributionTable(title, records, amountLabel, includeAmountShare
     const row = document.createElement("tr");
     const values = [record.name, `${record.amount} HKD`];
     if (includeAmountShare) {
-      values.push(`${record.amount_share}%`);
+      values.push(record.amount_share === undefined ? "—" : `${record.amount_share}%`);
     }
     values.push(`${record.count}`);
     appendCells(row, values);
+    if (isOffsetBasis()) {
+      const magnitude = Math.max(1, ...records.map(item => Math.abs(Number(item.amount))));
+      const track = document.createElement('div'); track.className='signed-track';
+      const bar = document.createElement('span'); const number=Number(record.amount);
+      bar.className=number < 0 ? 'signed-bar negative' : 'signed-bar positive';
+      bar.style.width=`${Math.abs(number)/magnitude*50}%`; track.append(bar);row.children[1].append(track);
+    }
     body.append(row);
   }
   table.append(head, body);
@@ -950,16 +1063,16 @@ function renderTransactionAnalysis(data) {
 
   const coverage = data.rate_coverage;
   const coverageParts = [
-    `符合条件 ${data.matched_transaction_count} 笔`,
-    `原币 HKD ${coverage.direct_hkd_count} 笔`,
-    `当天汇率换算 ${coverage.exact_rate_count} 笔`,
-    `邻近日期汇率换算 ${coverage.nearest_rate_count} 笔`,
+    data.basis === "offset" ? `符合条件 ${data.entry_count} 条统计记录，涉及 ${data.transaction_count} 笔原始流水` : `符合条件 ${data.matched_transaction_count} 笔`,
+    `原币 HKD ${coverage.direct_hkd_count} ${data.basis === "offset" ? "条记录" : "笔"}`,
+    `当天汇率换算 ${coverage.exact_rate_count} ${data.basis === "offset" ? "条记录" : "笔"}`,
+    `${data.basis === "offset" ? "含邻近汇率" : "邻近日期汇率换算"} ${coverage.nearest_rate_count} ${data.basis === "offset" ? "条记录" : "笔"}`,
   ];
   if (coverage.excluded_count) {
     const missing = coverage.missing_currencies.length
       ? `（${coverage.missing_currencies.join("、")}）`
       : "";
-    coverageParts.push(`未纳入 ${coverage.excluded_count} 笔${missing}`);
+    coverageParts.push(`未纳入 ${coverage.excluded_count} ${data.basis === "offset" ? "条记录" : "笔"}${missing}`);
   }
 
   if (!data.statistics) {
@@ -981,7 +1094,7 @@ function renderTransactionAnalysis(data) {
   metricGrid.className = "account-state-grid";
   const metrics = [
     { label: "总金额", value: `${statistics.total_amount} HKD`, primary: true },
-    { label: "纳入统计笔数", value: `${statistics.converted_transaction_count} 笔` },
+    { label: data.basis === "offset" ? "纳入统计记录" : "纳入统计笔数", value: `${statistics.converted_transaction_count} ${data.basis === "offset" ? "条" : "笔"}` },
     { label: "有流水天数", value: `${statistics.active_day_count} / ${statistics.range_day_count} 天` },
     { label: "范围日均", value: `${statistics.calendar_day_mean} HKD` },
     { label: "有流水日均", value: `${statistics.active_day_mean} HKD` },
@@ -997,6 +1110,9 @@ function renderTransactionAnalysis(data) {
   statisticsBlock.append(metricGrid);
   analysisContent.append(statisticsBlock, renderAnalysisCalendar(data), renderHistogram(data), renderWeekdayDistribution(data));
 
+  if (data.basis === 'offset' && data.category_distribution.some(item => item.amount_share === undefined)) {
+    analysisContent.append(createAnalysisSummary('存在负分类净额、零合计或换算不完整时，分类仅显示金额，不计算占比。'));
+  }
   const distributions = document.createElement("section");
   distributions.className = "analysis-block";
   const distributionGrid = document.createElement("div");
@@ -1021,7 +1137,7 @@ function renderTransactionAnalysis(data) {
   analysisContent.hidden = false;
 }
 
-async function loadTransactionAnalysis() {
+async function loadTransactionAnalysis(serial = searchRequestId) {
   analysisContent.replaceChildren();
   analysisContent.hidden = true;
   setStatus(analysisStatus, "");
@@ -1035,8 +1151,9 @@ async function loadTransactionAnalysis() {
   analysisConstraint.hidden = true;
   try {
     const data = await request(buildAnalysisPath());
+    if (serial !== searchRequestId) return;
     renderTransactionAnalysis(data);
-    setStatus(analysisStatus, "已按 HKD 统计", "success");
+    setStatus(analysisStatus, data.budget_warnings?.length ? '按 HKD 统计 · 未包含跨预算待归属事项' : "已按 HKD 统计", "success");
   } catch (error) {
     analysisConstraint.textContent = error.message;
     analysisConstraint.hidden = false;
@@ -1049,10 +1166,33 @@ async function loadSearch(resetPage = false, openResults = false) {
     state.search.offset = 0;
   }
   setStatus(searchStatus, "");
+  const serial = ++searchRequestId;
+  document.querySelector('#search-results-body').replaceChildren();
+  transactionSearchSummaryContent.replaceChildren();
+  analysisContent.replaceChildren();
+  if (isOffsetBasis() && !window.OffsetUI) throw new Error('冲销界面未加载完整，请刷新页面；原始流水查询仍可使用。');
+  if (isOffsetBasis() && (searchAdjustmentOnlyInput.checked || selectedSearchTypes().some(type => !['expense','income'].includes(type)))) {
+    throw new Error('冲销后收支只支持收入和支出，请取消转账、换汇、调整等类型及“仅手工调整”后查询。');
+  }
   const data = await request(buildSearchPath());
-  renderSearchResults(data.transactions);
+  if (serial !== searchRequestId) return;
+  renderBudgetWarnings(data);
+  document.querySelector('#search-results-body').closest('table').querySelector('thead').hidden = isOffsetBasis();
+  if (isOffsetBasis()) {
+    const body = document.querySelector('#search-results-body');
+    for (const entry of data.entries) {
+      const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan=9;
+      cell.append(window.OffsetUI.entryCell(entry, id => openTransactionEditor(id).catch(error => setStatus(searchStatus,error.message,'error'))));
+      row.append(cell); body.append(row);
+    }
+    if (!data.entries.length) {const row=document.createElement('tr'); const cell=document.createElement('td'); cell.colSpan=9;cell.textContent='没有符合条件的统计记录';row.append(cell);body.append(row);}
+  } else renderSearchResults(data.transactions);
   updateSearchPagination(data.pagination);
-  renderTransactionSearchSummary(data.summary);
+  if (isOffsetBasis()) {
+    window.OffsetUI.summary(transactionSearchSummaryContent, data.summary);
+    transactionSearchSummaryMeta.textContent = '冲销后收支 · 统计日期归属'+(data.budget_warnings?.length?' · 仅已归属事项':'');
+    document.querySelector('#search-summary').textContent = `共 ${data.pagination.total} 条统计记录`;
+  } else renderTransactionSearchSummary(data.summary);
   if (resetPage && !openResults) {
     searchResultsDetails.open = false;
   } else if (openResults) {
@@ -1060,7 +1200,7 @@ async function loadSearch(resetPage = false, openResults = false) {
   }
   state.search.loaded = true;
   updateViewVisibility();
-  await loadTransactionAnalysis();
+  await loadTransactionAnalysis(serial);
 }
 
 function renderSearchCategoryOptions(categories) {
@@ -1136,6 +1276,8 @@ function updateEditorFieldState() {
   const isExpense = type === "expense";
   const isAdjustment = type === "adjustment";
   const isMovement = !isIncome && !isExpense && !isAdjustment;
+  if(editorBudgetSelect)editorBudgetSelect.disabled=!budgetConfig||(!isIncome&&!isExpense);
+  if(editorBudgetSelect?.options[0])editorBudgetSelect.options[0].textContent=isExpense?`${budgetConfig?.systems.find(s=>s.id===budgetConfig.daily_expense)?.name||'日常预算'}（自动）`:'未归属';
 
   editorSourceSelect.disabled = isIncome;
   editorDestinationSelect.disabled = isExpense;
@@ -1173,6 +1315,10 @@ async function openTransactionEditor(transactionId) {
   editorInflowInput.value = transaction.inflow_amount || "";
   editorCounterpartyInput.value = transaction.counterparty || "";
   editorNoteInput.value = transaction.note || "";
+  if(editorBudgetSelect&&budgetConfig){
+    setSelectOptions(editorBudgetSelect,budgetConfig.systems.filter(s=>s.is_active||s.id===transaction.budget_system_id),'未归属',s=>s.name+(s.is_active?'':'（停用）'));
+    editorBudgetSelect.value=transaction.budget_system_id?String(transaction.budget_system_id):'';
+  }
   setEditorCategoryOptions(
     transaction.transaction_type === "income"
       ? "income"
@@ -1188,6 +1334,7 @@ async function openTransactionEditor(transactionId) {
 
 function buildEditorPayload() {
   return {
+    ...(editorBudgetSelect&&budgetConfig?{budget_system_id:editorBudgetSelect.disabled?null:Number(editorBudgetSelect.value)||null}:{}),
     transaction_date: editorDateInput.value,
     transaction_type: editorTypeSelect.value,
     source_account_id: editorSourceSelect.value ? Number(editorSourceSelect.value) : null,
@@ -1292,6 +1439,8 @@ async function refreshAfterChange() {
 }
 
 async function initialize() {
+  updateBasisDescription();
+  const budgetLoading=loadBudgetFilters();
   const [accounts, expenseCategories, incomeCategories] = await Promise.all([
     request("/api/accounts?include_inactive=true"),
     request("/api/categories?kind=expense&include_inactive=true"),
@@ -1308,13 +1457,15 @@ async function initialize() {
   renderSearchCategoryOptions(state.categories);
 
   if (accounts.length) {
-    detailAccountSelect.value = String(
-      accounts.find((account) => account.is_active)?.id || accounts[0].id,
-    );
+    const defaultAccount = accounts
+      .filter((account) => account.is_active)
+      .sort(compareAccountsByPriority)[0] || accounts[0];
+    detailAccountSelect.value = String(defaultAccount.id);
     refreshPickers();
     await loadDetail(true);
   }
   updateViewVisibility();
+  await budgetLoading;
 }
 
 for (const button of document.querySelectorAll(".detail-view-mode")) {
@@ -1369,6 +1520,7 @@ searchForm.addEventListener("submit", (event) => {
 });
 
 document.querySelector("#clear-search-filters").addEventListener("click", () => {
+  if(searchBudgetSelect)searchBudgetSelect.value='';
   searchAccountSelect.value = "";
   searchStartDateInput.value = "";
   searchEndDateInput.value = "";
@@ -1523,4 +1675,7 @@ openingBalanceForm.addEventListener("submit", async (event) => {
   }
 });
 
-initialize().catch((error) => setStatus(detailStatus, error.message, "error"));
+initialize().then(async () => {
+  const transactionId = new URLSearchParams(location.search).get("transaction");
+  if (transactionId) await openTransactionEditor(Number(transactionId));
+}).catch((error) => setStatus(detailStatus, error.message, "error"));

@@ -1,0 +1,82 @@
+(() => {
+  const {$,node,request,options,status,button}=BudgetUI;
+  let config,categories=[],accounts=[],editing=null,editCollection=null,busy=false;
+  const names={systems:'预算系统（预算用途）',storage:'存储方式',purposes:'历史用途标签',rules:'分类映射',presets:'记账预设'};
+  const systemName=id=>config.systems.find(s=>s.id===id)?.name||'未选择';
+  const categoryName=id=>categories.find(c=>c.id===id)?.display_name||'未指定分类';
+  async function act(fn){if(busy)return;busy=true;document.querySelector('main').inert=true;try{await fn();}catch(e){status(e.message,true);}finally{busy=false;document.querySelector('main').inert=false;}}
+  const copyPanel=node('details'),copyTitle=node('summary','复制其他预算的栏目'),copySource=node('select'),copyTarget=node('select');
+  copyPanel.className='catalog-copy';
+  copySource.id='catalog-source';copyTarget.id='catalog-target';
+  for(const [label,select] of [['来源预算',copySource],['目标预算（须仅含待定栏目）',copyTarget]]){const el=node('label',label);el.append(select);copyPanel.append(el);}
+  copyPanel.prepend(copyTitle);copyPanel.append(button('复制两套栏目',()=>act(async()=>{config=await request('/api/budget/copy-catalog',{expected_version:config.version,source_system_id:Number(copySource.value),target_system_id:Number(copyTarget.value)},'POST');render();status('栏目已复制，各预算可独立修改。');})));
+  $('settings-list').after(copyPanel);
+  function render(){
+    options(copySource,config.systems,null,copySource.value||config.systems[0]?.id);options(copyTarget,config.systems.filter(s=>s.is_active),null,copyTarget.value||config.systems.at(-1)?.id);
+    options($('daily-expense'),config.systems.filter(s=>s.is_active),null,config.daily_expense);
+    options($('default-expense'),config.systems.filter(s=>s.is_active),'自动计入日常预算',config.defaults.expense);
+    options($('default-income'),config.systems.filter(s=>s.is_active),'未归属',config.defaults.income);
+    const selected=$('settings-system').value||new URLSearchParams(location.search).get('system')||config.systems[0]?.id;
+    options($('settings-system'),config.systems,null,selected);
+    const key=$('settings-collection').value, dimension=['storage','purposes'].includes(key);
+    $('settings-system').disabled=!dimension;
+    $('settings-hint').textContent=key==='purposes'?'仅用于保留和维护旧记录的用途标签。新预算直接选择预算系统作为用途，无须创建这些标签。':key==='systems'?'这里创建的预算系统就是预算用途。先为每月填写总额，再分配存储方式。':dimension?'存储方式是预算总额下面的二级分配，可继续细分；已使用的栏目请停用保留历史。':'新支出按手动选择、预设、分类映射、模式默认的顺序确定预算。';
+    const target=$('settings-list');target.replaceChildren();
+    const rows=config[key].filter(r=>!dimension||r.budget_system_id===Number($('settings-system').value)).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)||a.id-b.id);
+    for(const r of rows){
+      const row=node('div','','budget-setting-row');
+      const title=r.path||r.name||`${r.mode==='expense'?'支出':'入账'} / ${categoryName(r.category_id)}`;
+      row.append(node('strong',title),node('span',`${r.is_active?'启用':'已停用'}${key==='systems'&&r.id===config.daily_expense?' · 日常归属':''}${key==='rules'||key==='presets'?' · '+systemName(r.budget_system_id):''}`,r.is_active?'setting-state':'setting-state is-inactive'));
+      if(!r.is_placeholder){row.append(button('编辑',()=>act(()=>open(key,r)),'quiet-button'),button('删除',()=>act(async()=>{if(!confirm(`删除“${title}”？有历史引用时请改用停用。`))return;config=await request(`/api/budget/config/${key}/${r.id}?expected_version=${config.version}`,undefined,'DELETE');render();status('已删除。');}),'quiet-button danger-button'));}
+      else row.append(node('small','系统保留，用于尚未细分的计划'));
+      target.append(row);
+    }
+    if(!rows.length)target.append(node('p','暂无项目，点击“新增”创建。'));
+  }
+  function refreshCategory(selected=''){options($('setting-category'),categories.filter(c=>c.kind===$('setting-mode').value&&c.is_active),'不预填分类',selected);}
+  function refreshParent(selected=''){
+    const rows=config[editCollection]||[];
+    const descendants=new Set(editing?[editing.id]:[]);let changed=true;
+    while(changed){changed=false;for(const r of rows)if(descendants.has(r.parent_id)&&!descendants.has(r.id)){descendants.add(r.id);changed=true;}}
+    options($('setting-parent'),rows.filter(r=>r.budget_system_id===Number($('setting-system').value)&&r.is_active&&!r.is_placeholder&&!descendants.has(r.id)),'顶级栏目',selected);
+  }
+  async function open(key,row=null){
+    editCollection=key;editing=row;$('setting-form').reset();
+    const dimension=['storage','purposes'].includes(key);
+    const fields=new Set(key==='systems'?['name','order','note']:dimension?['name','system','parent','order','note']:key==='rules'?['system','mode','category']:['name','system','mode','category','account']);
+    document.querySelectorAll('[data-setting]').forEach(e=>{e.hidden=!fields.has(e.dataset.setting);for(const i of e.querySelectorAll('input,select'))i.disabled=e.hidden;});
+    options($('setting-system'),config.systems.filter(s=>s.is_active||s.id===row?.budget_system_id),null,row?.budget_system_id||$('settings-system').value||config.systems[0]?.id);
+    if(dimension&&row)$('setting-system').disabled=true;
+    $('setting-name').required=fields.has('name');$('setting-category').required=key==='rules';
+    $('setting-name').value=row?.name||'';$('setting-note').value=row?.note||'';$('setting-order').value=row?.sort_order||0;
+    $('setting-mode').value=row?.mode||'expense';$('setting-active').value=row?.is_active===0?'0':'1';
+    refreshCategory(row?.category_id);if(dimension)refreshParent(row?.parent_id);
+    options($('setting-account'),accounts,'不预填账户',row?.account_id);
+    $('setting-title').textContent=(row?'编辑':'新增')+names[key];$('setting-editor').hidden=false;$('setting-editor').scrollIntoView({behavior:'smooth'});
+    let impact=$('setting-impact');if(!impact){impact=node('p');impact.id='setting-impact';$('setting-title').after(impact);}impact.textContent='';
+    if(dimension&&row){const result=await request(`/api/budget/config/${key}/${row.id}/impact`);impact.textContent=`当前栏目及子项涉及 ${result.months.length} 个月、${result.item_count} 笔计划。改名或调整层级后，累计按新结构整理，历史版本保留原名称。`;}
+    if(key==='systems'&&row){const result=await request(`/api/budget/config/systems/${row.id}/impact`);impact.textContent=`此预算已有 ${result.plan_count} 份月计划、${result.transaction_count} 笔原始流水引用。改名不改变归属，有引用时请停用保留历史。`;}
+  }
+  $('new-setting').onclick=()=>act(()=>open($('settings-collection').value));
+  $('cancel-setting').onclick=()=>{$('setting-editor').hidden=true;};
+  $('settings-collection').onchange=()=>{$('setting-editor').hidden=true;render();};$('settings-system').onchange=render;
+  $('setting-system').onchange=()=>{if(['storage','purposes'].includes(editCollection))refreshParent();};$('setting-mode').onchange=()=>refreshCategory();
+  $('setting-form').onsubmit=e=>{e.preventDefault();act(async()=>{
+    const key=editCollection, body={expected_version:config.version,is_active:$('setting-active').value==='1'};
+    if(key!=='rules')body.name=$('setting-name').value;
+    if(key!=='systems')body.budget_system_id=Number($('setting-system').value);
+    if(['systems','storage','purposes'].includes(key)){body.sort_order=Number($('setting-order').value);body.note=$('setting-note').value;}
+    if(['storage','purposes'].includes(key))body.parent_id=Number($('setting-parent').value)||null;
+    if(['rules','presets'].includes(key)){body.mode=$('setting-mode').value;body.category_id=Number($('setting-category').value)||null;}
+    if(key==='presets')body.account_id=Number($('setting-account').value)||null;
+    config=await request(`/api/budget/config/${key}${editing?'/'+editing.id:''}`,body,editing?'PUT':'POST');
+    $('setting-editor').hidden=true;render();status('已保存。历史流水归属保持不变。');
+  });};
+  $('budget-defaults').onsubmit=e=>{e.preventDefault();act(async()=>{config=await request('/api/budget/defaults',{expected_version:config.version,daily_expense:Number($('daily-expense').value),expense:Number($('default-expense').value)||null,income:Number($('default-income').value)||null},'PUT');render();status('规则已保存。未单独标注的支出按日常预算统计，明确归属的记录保持不变。');});};
+  async function load(){
+    [config,categories,accounts]=await Promise.all([request('/api/budget/config'),Promise.all([request('/api/categories?kind=expense&include_inactive=true'),request('/api/categories?kind=income&include_inactive=true')]).then(a=>a.flat()),request('/api/accounts')]);
+    render();
+  }
+  $('reload-settings').onclick=()=>act(async()=>{await load();$('setting-editor').hidden=true;status('已重新加载。');});
+  load().catch(e=>status(e.message,true));
+})();

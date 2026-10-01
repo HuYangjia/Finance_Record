@@ -4,7 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>个人财务账本 - 账户与流水</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260908-5">
+    <link rel="icon" href="/static/compass-rose.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/styles.css?v=20261001-2">
+    <link rel="stylesheet" href="/static/workspace.css?v=20261001-2">
   </head>
   <body>
     <header class="topbar">
@@ -18,6 +20,9 @@
           <a class="nav-link" href="/overview">概况与查看</a>
           <a class="nav-link is-active" href="/accounts" aria-current="page">账户与流水</a>
           <a class="nav-link" href="/investments">投资与汇率</a>
+          <a class="nav-link" href="/offsets">冲销与代收代付</a>
+          <a class="nav-link" href="/budgets">预算计划</a>
+          <a class="nav-link" href="/settings">设置</a>
         </nav>
       </div>
     </header>
@@ -142,10 +147,16 @@
       <section id="transaction-search-panel" class="transaction-search-panel" data-detail-view="search" hidden aria-labelledby="transaction-search-title">
         <div class="section-heading">
           <h2 id="transaction-search-title">流水查询</h2>
+          <a href="/offsets">打开冲销事项（页面5）</a>
           <span id="search-status" role="status"></span>
         </div>
+        <label class="basis-control">查询口径<select id="cashflow-basis"><option value="raw">原始收付</option><option value="offset">冲销后收支</option><option value="groups">仅冲销事项（页面5）</option></select></label>
+        <p id="basis-description" class="analysis-summary"></p>
+        <p id="daily-budget-hint" class="subtle-note">未单独指定预算的支出自动计入日常预算，包含历史消费。</p>
+        <p id="budget-query-warning" class="empty-notice" role="status" hidden></p>
         <form id="transaction-search-form">
           <div class="detail-filter-grid">
+            <label class="budget-filter-field"><span>消费自预算 / 预算归属</span><select id="search-budget-system"><option value="">全部预算</option><option value="0">未归属（不含日常支出）</option></select></label>
             <label>
               <span>账户范围</span>
               <select id="search-account"></select>
@@ -289,6 +300,7 @@
             <span>分类</span>
             <select id="editor-category"></select>
           </label>
+          <label><span>预算归属</span><select id="editor-budget-system" disabled><option value="">未归属</option></select><small>支出不单独指定时，自动计入日常预算。</small></label>
           <label>
             <span>对象</span>
             <input id="editor-counterparty" type="text" maxlength="120">
@@ -424,7 +436,8 @@
       </form>
     </dialog>
 
-    <script src="/static/frequent-picker.js?v=20260908-3"></script>
-    <script src="/static/accounts.js?v=20260908-3"></script>
+    <script src="/static/frequent-picker.js?v=20261001-2"></script>
+    <script src="/static/offset-ui.js?v=20261001-2"></script>
+    <script src="/static/accounts.js?v=20261001-2"></script>
   </body>
 </html>

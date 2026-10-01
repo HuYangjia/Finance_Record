@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>个人财务账本 - 预算计划</title>
+  <link rel="icon" href="/static/compass-rose.svg">
+  <link rel="stylesheet" href="/static/styles.css?v=20261001-2">
+  <link rel="stylesheet" href="/static/workspace.css?v=20261001-4">
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner">
+  <div class="brand"><h1>个人财务账本</h1><p>记录生活，安排未来</p></div>
+  <nav class="primary-nav" aria-label="主导航">
+    <a class="nav-link" href="/">记账</a><a class="nav-link" href="/overview">概况与查看</a>
+    <a class="nav-link" href="/accounts">账户与流水</a><a class="nav-link" href="/investments">投资与汇率</a>
+    <a class="nav-link" href="/offsets">冲销与代收代付</a><a class="nav-link is-active" href="/budgets" aria-current="page">预算计划</a><a class="nav-link" href="/settings">设置</a>
+  </nav>
+</div></header>
+<main class="budget-main plan-main">
+  <div class="page-intro"><div><p class="eyebrow">第六页 / 预算计划</p><h2>先定用途，再安排存放。</h2><p>每个预算系统填一份总额，再分配到活期、定期、ETF 等存储方式。</p></div><a id="manage-budget" class="text-link" href="/settings">管理预算与存储方式 ↗</a></div>
+  <section class="transactions-panel plan-scope-panel">
+    <div class="section-heading"><h2>查看月度计划</h2><button id="new-budget" type="button">＋新增预算</button></div>
+    <form id="budget-load">
+      <div class="form-grid plan-scope-grid">
+        <label>用途（预算系统）<select id="plan-system"></select></label>
+        <label>编制月份<input id="plan-month" type="month" min="0001-01" max="9999-12" required></label>
+        <label>查看币种<select id="plan-currency"></select></label>
+        <label><span>累计起始月 <small>留空为全部历史</small></span><input id="plan-start" type="month" min="0001-01" max="9999-12"></label>
+      </div>
+      <div class="plan-month-navigation" role="group" aria-label="切换编制月份"><button id="plan-previous-month" type="button" class="secondary-button">← 上个月</button><button id="plan-next-month" type="button" class="secondary-button">下个月 →</button><button id="plan-current-month" type="button" class="secondary-button">回到本月</button></div>
+      <div class="scope-footer"><p class="subtle-note">历史月份可补录、修改。不同币种分别统计；存储分配不会重复增加总预算。</p><div class="form-actions"><button id="budget-export" type="button" class="secondary-button">导出 Excel</button><button type="submit">加载所选计划</button></div></div>
+    </form>
+    <p id="budget-status" role="status" aria-live="polite"></p>
+    <div id="plan-metrics" class="metric-grid"></div>
+  </section>
+  <section class="transactions-panel">
+    <div class="section-heading"><div><p class="eyebrow">01 / 用途总预算</p><h2 id="month-plans-title">所选月预算</h2></div><span class="small-badge">总额只录一次</span></div>
+    <div id="month-plans" class="table-wrap"></div>
+  </section>
+  <section id="plan-editor" class="transactions-panel plan-editor-panel" hidden>
+    <div class="section-heading"><div><p class="eyebrow">编制 / 修改</p><h2 id="plan-editor-title">新增预算</h2></div><span id="plan-state" class="plan-state"></span></div>
+    <form id="plan-form">
+      <div class="form-grid plan-identity">
+        <label>用途（预算系统）<select id="entry-system" required></select></label>
+        <label>预算月份<input id="entry-month" type="month" min="0001-01" max="9999-12" required></label>
+        <label>预算币种<select id="entry-currency" required></select></label>
+        <label>总预算金额<input id="plan-total" type="number" min="0" step="0.01" required placeholder="先填总额，再分配存储方式"></label>
+      </div>
+      <label>计划说明<input id="plan-note" maxlength="500" placeholder="可选"></label>
+      <p id="plan-identity-hint" class="subtle-note"></p>
+      <div class="allocation-heading"><div><h3>二级存储分配</h3><p class="subtle-note">可稍后补充。只选择存储方式和金额，用途、月份及币种自动跟随这份总预算。</p></div><strong id="allocation-balance" role="status"></strong></div>
+      <div class="table-wrap plan-items-wrap"><table><thead><tr><th>存储方式</th><th>分配金额</th><th>明细名称（可选）</th><th>备注（可选）</th><th>操作</th></tr></thead><tbody id="plan-items"></tbody></table></div>
+      <p id="plan-empty" class="plan-empty">尚未分配存储方式。可以先保存总预算，以后再分配。</p>
+      <div class="form-actions plan-actions"><button id="add-plan-item" type="button" class="secondary-button">＋分配存储方式</button><button id="add-storage" type="button" class="secondary-button">＋新增存储栏目</button><button id="plan-history" type="button" class="secondary-button">历史版本</button><button id="close-plan" type="button" class="secondary-button">收起</button><button id="save-plan" type="submit">保存预算</button></div>
+    </form>
+    <details class="collapsible-details plan-copy"><summary>从其他月份复制计划</summary><p class="subtle-note">复制同一用途和币种的总额及存储分配，保存后才生效。</p><div class="copy-controls"><label>来源月份<input id="copy-month" type="month"></label><button id="copy-plan" type="button" class="secondary-button">预览复制（保存后生效）</button></div></details>
+  </section>
+  <section class="transactions-panel matrix-panel">
+    <div class="section-heading"><div><p class="eyebrow">02 / 交叉总表</p><h2>预算用途 × 存储方式</h2></div><span class="small-badge">按币种分别展示</span></div>
+    <div class="form-grid matrix-controls"><label>查看范围<select id="matrix-scope"><option value="month">所选月预算</option><option value="cumulative">累计预算</option></select></label><label>栏目层级<select id="matrix-level"><option value="leaf">展开全部明细</option><option value="root">按一级存储方式汇总</option></select></label><button id="matrix-transpose" type="button" class="secondary-button">交换行列</button></div>
+    <p id="matrix-caption" class="subtle-note"></p><div id="budget-matrix"></div>
+  </section>
+</main>
+<dialog id="budget-detail-dialog" class="app-dialog budget-dialog"><div class="dialog-heading"><h2 id="budget-detail-title">预算明细</h2><button type="button" data-budget-close aria-label="关闭">×</button></div><div id="budget-detail-content"></div></dialog>
+<dialog id="storage-dialog" class="app-dialog budget-dialog"><form id="storage-form"><h2>新增存储方式</h2><label>名称<input id="new-dimension-name" maxlength="120" required></label><label>父栏目<select id="new-dimension-parent"></select></label><p id="storage-error" role="alert"></p><div class="form-actions"><button type="button" id="cancel-storage" class="secondary-button">取消</button><button type="submit">创建栏目</button></div></form></dialog>
+<script src="/static/budget-ui.js?v=20261001-2"></script><script src="/static/budgets.js?v=20261001-4"></script>
+</body></html>

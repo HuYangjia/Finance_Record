@@ -4,7 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>个人财务账本 - 概况与查看</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260908-5">
+    <link rel="icon" href="/static/compass-rose.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/styles.css?v=20261001-2">
+    <link rel="stylesheet" href="/static/workspace.css?v=20261001-2">
   </head>
   <body>
     <header class="topbar">
@@ -18,6 +20,9 @@
           <a class="nav-link is-active" href="/overview" aria-current="page">概况与查看</a>
           <a class="nav-link" href="/accounts">账户与流水</a>
           <a class="nav-link" href="/investments">投资与汇率</a>
+          <a class="nav-link" href="/offsets">冲销与代收代付</a>
+          <a class="nav-link" href="/budgets">预算计划</a>
+          <a class="nav-link" href="/settings">设置</a>
         </nav>
         <div class="topbar-actions">
           <label class="month-control">
@@ -36,6 +41,8 @@
           <span id="month-label"></span>
         </div>
         <div id="overview-status" role="status"></div>
+        <label class="basis-control">收支口径<select id="cashflow-basis"><option value="raw">原始收付</option><option value="offset">冲销后收支</option></select></label>
+        <div id="personal-cash-flow" hidden></div>
         <div id="cash-flow" class="metric-grid"></div>
         <div id="available-cash" class="metric-grid"></div>
         <div id="net-worth" class="metric-grid"></div>
@@ -102,6 +109,7 @@
       </section>
     </main>
 
-    <script src="/static/overview.js?v=20260908-1"></script>
+    <script src="/static/offset-ui.js?v=20261001-2"></script>
+    <script src="/static/overview.js?v=20261001-2"></script>
   </body>
 </html>

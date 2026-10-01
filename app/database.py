@@ -10,6 +10,7 @@ DATA_DIR = ROOT_DIR / "data"
 BACKUP_DIR = ROOT_DIR / "backups"
 DATABASE_PATH = DATA_DIR / "finance.db"
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+BUDGET_SCHEMA_PATH = Path(__file__).with_name("budget_schema.sql")
 
 CURRENCY_SEED = (
     ("CNY", "人民币", "¥", 2),
@@ -51,10 +52,31 @@ def connect() -> sqlite3.Connection:
 
 
 def initialize_database() -> None:
+    if DATABASE_PATH.exists():
+        with sqlite3.connect(DATABASE_PATH) as existing:
+            tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if "transactions" in tables and "budget_system_id" not in {r[1] for r in existing.execute('PRAGMA table_info(transactions)')}:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
+            elif 'budget_systems' in tables and 'app_settings' in tables and not existing.execute("SELECT 1 FROM app_settings WHERE key='daily_expense_budget_system_id'").fetchone():
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-daily-budget-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
+            if "transactions" in tables and "transaction_offset_groups" not in tables:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                migration_backup = BACKUP_DIR / f"finance-pre-offset-{datetime.now():%Y%m%d-%H%M%S-%f}.db"
+                with sqlite3.connect(migration_backup) as destination:
+                    existing.backup(destination)
     with connect() as connection:
         connection.execute("PRAGMA journal_mode = WAL")
+        connection.executescript(BUDGET_SCHEMA_PATH.read_text(encoding="utf-8"))
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        if 'budget_system_id' not in {r['name'] for r in connection.execute('PRAGMA table_info(transactions)')}:
+            connection.execute('ALTER TABLE transactions ADD COLUMN budget_system_id INTEGER REFERENCES budget_systems(id) ON DELETE RESTRICT')
+        connection.execute('CREATE INDEX IF NOT EXISTS transactions_budget_index ON transactions(budget_system_id,transaction_date)')
         migrate_change_audit_logs(connection)
+        migrate_daily_frequent_snapshot_schema(connection)
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         connection.executemany(
             """
@@ -70,6 +92,32 @@ def initialize_database() -> None:
             """,
             CATEGORY_SEED,
         )
+        if not connection.execute("SELECT 1 FROM app_settings WHERE key='budget_initialized'").fetchone():
+            system_id = connection.execute("INSERT INTO budget_systems(name) VALUES ('日常预算')").lastrowid
+            for table, names in [('budget_storage_methods', ['待定存储方式','活期','定期','ETF','股票']),
+                                 ('budget_purposes', ['待定用途','日常生活','慈善','留存'])]:
+                for order, name in enumerate(names):
+                    connection.execute(f'INSERT INTO {table}(budget_system_id,name,sort_order,is_placeholder) VALUES (?,?,?,?)', (system_id,name,order,int(order==0)))
+            connection.executemany('INSERT INTO app_settings(key,value) VALUES (?,?)', [
+                ('budget_initialized','1'), ('budget_config_version','1'),
+                ('default_expense_budget_system_id',str(system_id)), ('default_income_budget_system_id','null')])
+        if not connection.execute("SELECT 1 FROM app_settings WHERE key='daily_expense_budget_system_id'").fetchone():
+            daily = connection.execute("SELECT id FROM budget_systems WHERE name='日常预算' AND is_active=1").fetchone()
+            if daily is None:
+                daily = connection.execute("""SELECT b.id FROM budget_systems b JOIN app_settings s
+                    ON b.id=CAST(s.value AS INTEGER) WHERE s.key='default_expense_budget_system_id' AND b.is_active=1""").fetchone()
+            if daily is None:
+                name, suffix = '日常预算', 1
+                while connection.execute('SELECT 1 FROM budget_systems WHERE name=?', (name,)).fetchone():
+                    suffix += 1
+                    name = f'日常预算 {suffix}'
+                daily_id = connection.execute('INSERT INTO budget_systems(name) VALUES (?)', (name,)).lastrowid
+                for table, label in [('budget_storage_methods','待定存储方式'),('budget_purposes','待定用途')]:
+                    connection.execute(f'INSERT INTO {table}(budget_system_id,name,is_placeholder) VALUES (?,?,1)', (daily_id,label))
+            else:
+                daily_id = daily['id']
+            connection.execute("INSERT INTO app_settings(key,value) VALUES ('daily_expense_budget_system_id',?)", (str(daily_id),))
+            connection.execute("UPDATE app_settings SET value=CAST(value AS INTEGER)+1 WHERE key='budget_config_version'")
 
 
 def migrate_change_audit_logs(connection: sqlite3.Connection) -> None:
@@ -86,6 +134,8 @@ def migrate_change_audit_logs(connection: sqlite3.Connection) -> None:
         or (
             "investment_valuation" in current_sql
             and "exchange_rate" in current_sql
+            and "offset_group" in current_sql
+            and "'budget'" in current_sql
         )
     ):
         return
@@ -103,7 +153,9 @@ def migrate_change_audit_logs(connection: sqlite3.Connection) -> None:
                     'transaction_flag',
                     'reconciliation',
                     'investment_valuation',
-                    'exchange_rate'
+                    'exchange_rate',
+                    'offset_group',
+                    'budget'
                 )
             ),
             entity_id INTEGER,
@@ -131,6 +183,36 @@ def migrate_change_audit_logs(connection: sqlite3.Connection) -> None:
         """
     )
     connection.execute("DROP TABLE change_audit_logs_legacy")
+
+
+def migrate_daily_frequent_snapshot_schema(connection: sqlite3.Connection) -> None:
+    snapshot_columns = {
+        row["name"]
+        for row in connection.execute(
+            "PRAGMA table_info(daily_frequent_snapshots)"
+        ).fetchall()
+    }
+    if "rules_version" not in snapshot_columns:
+        connection.execute(
+            """
+            ALTER TABLE daily_frequent_snapshots
+            ADD COLUMN rules_version INTEGER NOT NULL DEFAULT 1
+            """
+        )
+
+    account_activity_columns = {
+        row["name"]
+        for row in connection.execute(
+            "PRAGMA table_info(daily_account_frequent_activity)"
+        ).fetchall()
+    }
+    if "recent_record_count" not in account_activity_columns:
+        connection.execute(
+            """
+            ALTER TABLE daily_account_frequent_activity
+            ADD COLUMN recent_record_count INTEGER NOT NULL DEFAULT 0
+            """
+        )
 
 
 def create_backup() -> Path:

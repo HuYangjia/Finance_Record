@@ -1317,3 +1317,43 @@ button.analysis-calendar-day:not(:disabled):hover {
     padding: 0 10px;
   }
 }
+
+/* Offset events: actual ledger members and signed personal cashflow. */
+.basis-control { display: flex; align-items: center; gap: 12px; margin: 12px 0; }
+.basis-control select { width: auto; min-width: 160px; }
+.offset-main { max-width: 1280px; }
+.offset-entry { padding: 18px 0; border-bottom: 1px solid #dbe3ea; white-space: normal; }
+.offset-entry-title, .offset-amounts { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+.offset-amounts { margin: 10px 0; font-size: 1.15rem; font-weight: 700; }
+.offset-coverage { display: block; color: #596b7c; margin: 4px 0; }
+.offset-side { padding: 18px; margin: 16px 0; border: 1px solid #dbe3ea; border-radius: 10px; }
+.offset-member-row { display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid #e2e8ef; padding: 12px 0; }
+.offset-member-row label { display: flex; align-items: center; gap: 10px; }
+.offset-member-row input[type=checkbox] { width: auto; }
+.offset-member-row small { color: #596b7c; }
+.offset-members { margin: 12px 0; }
+.offset-members summary { cursor: pointer; }
+.offset-dialog { width: min(1000px, 95vw); padding: 24px; max-height: 90vh; overflow: auto; }
+.negative-amount { color: #9b4055; }
+.signed-track { position: relative; height: 8px; margin-top: 6px; background: linear-gradient(to right, #f4f6f8 49.5%, #94a3b8 49.5%, #94a3b8 50.5%, #f4f6f8 50.5%); }
+.signed-bar { position: absolute; top: 0; height: 8px; }
+.signed-bar.positive { left: 50%; background: #267785; }
+.signed-bar.negative { right: 50%; background: #ae5b74; }
+.offset-main [hidden], #cash-flow[hidden], #personal-cash-flow[hidden] { display: none !important; }
+.budget-main [hidden], .entry-main form[hidden], #budget-query-warning[hidden] { display: none !important; }
+.budget-main { max-width: 1440px; }
+.budget-main section { margin-bottom: 20px; }
+.budget-main .form-actions { gap: 8px; flex-wrap: wrap; }
+.budget-main .metric-card { display: flex; flex-direction: column; gap: 12px; padding: 20px; border: 1px solid #dbe3ea; border-radius: 10px; }
+.budget-main .metric-card strong { font-size: 1.15rem; }
+.budget-main table input, .budget-main table select { min-width: 140px; }
+.budget-main table input[type=number] { min-width: 130px; }
+.budget-main table select { display: block; margin-bottom: 6px; }
+.budget-main #plan-items td { min-width: 160px; white-space: normal; vertical-align: top; }
+.budget-setting-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 14px 0; border-bottom: 1px solid #dbe3ea; }
+.budget-setting-row strong { flex: 1; min-width: 200px; }
+.budget-dialog { width: min(1000px,95vw); max-height: 90vh; overflow: auto; padding: 24px; }
+.matrix-amount { border: 0; background: transparent; color: #146579; padding: 6px; min-width: 65px; }
+#budget-query-warning a { text-decoration: underline; }
+.entry-main label small { color: #596b7c; font-weight: normal; }
+@media (max-width: 700px) { .offset-side { padding: 10px; } .offset-entry-title { align-items: flex-start; flex-direction: column; } }

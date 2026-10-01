@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>个人财务账本 - 设置</title>
+  <link rel="icon" href="/static/compass-rose.svg">
+  <link rel="stylesheet" href="/static/styles.css?v=20261001-2">
+  <link rel="stylesheet" href="/static/workspace.css?v=20261001-2">
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner">
+  <div class="brand"><h1>个人财务账本</h1><p>记录生活，安排未来</p></div>
+  <nav class="primary-nav" aria-label="主导航">
+    <a class="nav-link" href="/">记账</a>
+    <a class="nav-link" href="/overview">概况与查看</a>
+    <a class="nav-link" href="/accounts">账户与流水</a>
+    <a class="nav-link" href="/investments">投资与汇率</a>
+    <a class="nav-link" href="/offsets">冲销与代收代付</a>
+    <a class="nav-link" href="/budgets">预算计划</a>
+    <a class="nav-link is-active" href="/settings" aria-current="page">设置</a>
+  </nav>
+</div></header>
+<main class="budget-main settings-main">
+  <div class="page-intro"><div><p class="eyebrow">偏好与管理</p><h2>让记账适合你的习惯。</h2><p>默认照顾日常，单独安排专项；预算、栏目和映射都在这里管理。</p></div><a class="text-link" href="/budgets">打开预算计划 ↗</a></div>
+  <p id="budget-status" role="status" aria-live="polite"></p>
+  <div class="settings-layout">
+    <section class="transactions-panel defaults-panel">
+      <div class="section-heading"><div><p class="eyebrow">01 / 归属规则</p><h2>日常与默认预算</h2></div><span class="small-badge">自动归类</span></div>
+      <form id="budget-defaults">
+        <label class="daily-budget-setting">未单独指定的支出计入<select id="daily-expense" required></select><small>包含以前的所有未标注消费。更换后，这些支出的统计归属会一起切换。</small></label>
+        <div class="setting-divider"><span>新增记账时预填</span></div>
+        <div class="form-grid">
+          <label>支出默认预算<select id="default-expense"></select></label>
+          <label>入账默认预算<select id="default-income"></select></label>
+        </div>
+        <p class="subtle-note">预填项只影响下一笔。已有的明确预算标记会保留。</p>
+        <div class="form-actions"><button type="submit">保存默认项</button></div>
+      </form>
+    </section>
+    <section class="transactions-panel catalog-panel">
+      <div class="section-heading"><div><p class="eyebrow">02 / 自定义管理</p><h2>预算、栏目与映射</h2></div><button id="new-setting" type="button">＋新增</button></div>
+      <div class="settings-toolbar form-grid">
+        <label>管理内容<select id="settings-collection"><option value="systems">预算系统（预算用途）</option><option value="storage">存储方式</option><option value="purposes">历史用途标签</option><option value="rules">分类映射</option><option value="presets">收入 / 支出预设</option></select></label>
+        <label>栏目所属预算<select id="settings-system"></select></label>
+      </div>
+      <div class="catalog-caption"><p id="settings-hint" class="subtle-note"></p><button id="reload-settings" type="button" class="quiet-button">重新加载</button></div>
+      <div id="settings-list"></div>
+    </section>
+  </div>
+  <section class="transactions-panel" id="setting-editor" hidden>
+    <div class="section-heading"><div><p class="eyebrow">编辑项目</p><h2 id="setting-title">新增设置</h2></div></div>
+    <form id="setting-form"><div class="form-grid">
+      <label data-setting="name">名称<input id="setting-name" maxlength="120" placeholder="例如：专项预算、教育助学"></label>
+      <label data-setting="system">预算系统<select id="setting-system"></select></label>
+      <label data-setting="parent">父栏目<select id="setting-parent"></select></label>
+      <label data-setting="order">显示顺序<input id="setting-order" type="number" step="1" value="0"></label>
+      <label data-setting="mode">模式<select id="setting-mode"><option value="expense">支出</option><option value="income">入账</option></select></label>
+      <label data-setting="category">分类<select id="setting-category"></select></label>
+      <label data-setting="account">预填账户（可选）<select id="setting-account"></select></label>
+      <label data-setting="note">说明<input id="setting-note" maxlength="500"></label>
+      <label>状态<select id="setting-active"><option value="1">启用</option><option value="0">停用（保留历史）</option></select></label>
+    </div><div class="form-actions"><button type="button" id="cancel-setting" class="secondary-button">取消</button><button type="submit">保存设置</button></div></form>
+  </section>
+</main>
+<script src="/static/budget-ui.js?v=20261001-2"></script><script src="/static/settings.js?v=20261001-4"></script>
+</body></html>

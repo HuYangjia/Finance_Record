@@ -19,6 +19,23 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.database import ROOT_DIR, connect, create_backup, initialize_database
+from app.budgets import router as budgets_router, require_system, budget_filter_sql
+from app.offsets import (
+    router as offsets_router,
+    annotate_transactions,
+    group_for_transaction,
+    check_member_update,
+    record_member_update,
+)
+from app.personal_cashflow import (
+    read_ledger, build_entries, filter_entries, summarize as summarize_personal,
+)
+from app.reporting import (
+    amount_to_base_currency, amount_to_hkd, analysis_main_amount,
+    build_hkd_histogram, build_transaction_analysis, format_decimal,
+    hkd_bucket_bounds, nearest_cny_exchange_rate,
+    next_nice_hkd_bucket_width, nice_hkd_bucket_width,
+)
 
 
 STATIC_DIR = ROOT_DIR / "static"
@@ -61,6 +78,10 @@ FLAG_TYPE_LABELS = {
 INVESTMENT_ACCOUNT_TYPES = {"investment_asset", "broker_cash"}
 SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
 FX_RATE_SOURCE = "Frankfurter"
+FREQUENT_SNAPSHOT_RULE_VERSION = 2
+ACCOUNT_ACTIVITY_WINDOW_DAYS = 45
+ACCOUNT_RECENT_WINDOW_DAYS = 14
+CATEGORY_ACTIVITY_WINDOW_DAYS = 90
 FREQUENT_ACCOUNT_ACTIVITY_KEYS = (
     "overall",
     "expense_source",
@@ -96,9 +117,17 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="个人财务账本", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(offsets_router)
+app.include_router(budgets_router)
+
+
+@app.get("/offsets", include_in_schema=False)
+def offsets_page():
+    return FileResponse(STATIC_DIR / "offsets.html", headers={"Cache-Control": "no-store"})
 
 
 class ExpenseCreate(BaseModel):
+    budget_system_id: int | None = Field(default=None, gt=0)
     transaction_date: date = Field(default_factory=date.today)
     source_account_id: int
     amount: Decimal = Field(gt=0)
@@ -108,6 +137,7 @@ class ExpenseCreate(BaseModel):
 
 
 class IncomeCreate(BaseModel):
+    budget_system_id: int | None = Field(default=None, gt=0)
     transaction_date: date = Field(default_factory=date.today)
     destination_account_id: int
     amount: Decimal = Field(gt=0)
@@ -126,6 +156,7 @@ class TransferCreate(BaseModel):
 
 
 class TransactionUpdate(BaseModel):
+    budget_system_id: int | None = Field(default=None, gt=0)
     transaction_date: date
     transaction_type: str
     source_account_id: int | None = None
@@ -210,11 +241,6 @@ def today_in_shanghai() -> date:
 
 def decimal_to_storage(value: Decimal) -> str:
     return format(value.normalize(), "f")
-
-
-def format_decimal(value: Decimal, decimal_places: int = 4) -> str:
-    quantizer = Decimal(1).scaleb(-decimal_places)
-    return f"{value.quantize(quantizer, rounding=ROUND_HALF_UP):.{decimal_places}f}"
 
 
 def month_as_of_date(month: str) -> str:
@@ -800,6 +826,7 @@ def get_account_balance_row(connection, account_id: int):
 
 def format_transaction_for_edit(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {
+        "budget_system_id": snapshot.get("budget_system_id"),
         "id": snapshot["id"],
         "transaction_date": snapshot["transaction_date"],
         "transaction_type": snapshot["transaction_type"],
@@ -1259,8 +1286,8 @@ def get_currency_decimal_places_for_row(row) -> int:
     return row["decimal_places"]
 
 
-def frequent_activity_start_date(snapshot_date: date) -> str:
-    return (snapshot_date - timedelta(days=89)).isoformat()
+def activity_start_date(snapshot_date: date, days: int) -> str:
+    return (snapshot_date - timedelta(days=days - 1)).isoformat()
 
 
 def serialize_recent_activity(
@@ -1273,14 +1300,29 @@ def serialize_recent_activity(
     }
 
 
+def serialize_account_recent_activity(
+    record_count: int | None,
+    last_transaction_date: str | None,
+    recent_record_count: int | None,
+) -> dict[str, Any]:
+    return {
+        **serialize_recent_activity(record_count, last_transaction_date),
+        "recent_record_count": int(recent_record_count or 0),
+    }
+
+
 def empty_account_recent_activity() -> dict[str, dict[str, Any]]:
     return {
-        key: serialize_recent_activity(0, None)
+        key: serialize_account_recent_activity(0, None, 0)
         for key in FREQUENT_ACCOUNT_ACTIVITY_KEYS
     }
 
 
-def list_account_recent_activity(connection, start_date: str) -> dict[int, dict[str, Any]]:
+def list_account_recent_activity(
+    connection,
+    start_date: str,
+    recent_start_date: str,
+) -> dict[int, dict[str, Any]]:
     rows = connection.execute(
         """
         WITH account_legs AS (
@@ -1309,6 +1351,10 @@ def list_account_recent_activity(connection, start_date: str) -> dict[int, dict[
             COUNT(*) AS overall_record_count,
             MAX(transaction_date) AS overall_last_transaction_date,
             SUM(CASE
+                WHEN transaction_date >= ?
+                THEN 1 ELSE 0
+            END) AS overall_recent_record_count,
+            SUM(CASE
                 WHEN transaction_type = 'expense'
                  AND leg_direction = 'source'
                 THEN 1 ELSE 0
@@ -1319,6 +1365,12 @@ def list_account_recent_activity(connection, start_date: str) -> dict[int, dict[
                 THEN transaction_date
             END) AS expense_source_last_transaction_date,
             SUM(CASE
+                WHEN transaction_date >= ?
+                 AND transaction_type = 'expense'
+                 AND leg_direction = 'source'
+                THEN 1 ELSE 0
+            END) AS expense_source_recent_record_count,
+            SUM(CASE
                 WHEN transaction_type = 'income'
                  AND leg_direction = 'destination'
                 THEN 1 ELSE 0
@@ -1328,6 +1380,12 @@ def list_account_recent_activity(connection, start_date: str) -> dict[int, dict[
                  AND leg_direction = 'destination'
                 THEN transaction_date
             END) AS income_destination_last_transaction_date,
+            SUM(CASE
+                WHEN transaction_date >= ?
+                 AND transaction_type = 'income'
+                 AND leg_direction = 'destination'
+                THEN 1 ELSE 0
+            END) AS income_destination_recent_record_count,
             SUM(CASE
                 WHEN transaction_type IN (
                     'transfer',
@@ -1349,6 +1407,17 @@ def list_account_recent_activity(connection, start_date: str) -> dict[int, dict[
                 THEN transaction_date
             END) AS movement_source_last_transaction_date,
             SUM(CASE
+                WHEN transaction_date >= ?
+                 AND transaction_type IN (
+                    'transfer',
+                    'fx_exchange',
+                    'broker_deposit',
+                    'broker_withdrawal'
+                )
+                 AND leg_direction = 'source'
+                THEN 1 ELSE 0
+            END) AS movement_source_recent_record_count,
+            SUM(CASE
                 WHEN transaction_type IN (
                     'transfer',
                     'fx_exchange',
@@ -1367,33 +1436,57 @@ def list_account_recent_activity(connection, start_date: str) -> dict[int, dict[
                 )
                  AND leg_direction = 'destination'
                 THEN transaction_date
-            END) AS movement_destination_last_transaction_date
+            END) AS movement_destination_last_transaction_date,
+            SUM(CASE
+                WHEN transaction_date >= ?
+                 AND transaction_type IN (
+                    'transfer',
+                    'fx_exchange',
+                    'broker_deposit',
+                    'broker_withdrawal'
+                )
+                 AND leg_direction = 'destination'
+                THEN 1 ELSE 0
+            END) AS movement_destination_recent_record_count
         FROM account_legs
         GROUP BY account_id
         """,
-        (start_date, start_date),
+        (
+            start_date,
+            start_date,
+            recent_start_date,
+            recent_start_date,
+            recent_start_date,
+            recent_start_date,
+            recent_start_date,
+        ),
     ).fetchall()
     return {
         row["account_id"]: {
-            "overall": serialize_recent_activity(
+            "overall": serialize_account_recent_activity(
                 row["overall_record_count"],
                 row["overall_last_transaction_date"],
+                row["overall_recent_record_count"],
             ),
-            "expense_source": serialize_recent_activity(
+            "expense_source": serialize_account_recent_activity(
                 row["expense_source_record_count"],
                 row["expense_source_last_transaction_date"],
+                row["expense_source_recent_record_count"],
             ),
-            "income_destination": serialize_recent_activity(
+            "income_destination": serialize_account_recent_activity(
                 row["income_destination_record_count"],
                 row["income_destination_last_transaction_date"],
+                row["income_destination_recent_record_count"],
             ),
-            "movement_source": serialize_recent_activity(
+            "movement_source": serialize_account_recent_activity(
                 row["movement_source_record_count"],
                 row["movement_source_last_transaction_date"],
+                row["movement_source_recent_record_count"],
             ),
-            "movement_destination": serialize_recent_activity(
+            "movement_destination": serialize_account_recent_activity(
                 row["movement_destination_record_count"],
                 row["movement_destination_last_transaction_date"],
+                row["movement_destination_recent_record_count"],
             ),
         }
         for row in rows
@@ -1428,22 +1521,39 @@ def ensure_daily_frequent_snapshot(connection, snapshot_date: date) -> None:
     connection.execute("BEGIN IMMEDIATE")
     existing = connection.execute(
         """
-        SELECT 1
+        SELECT rules_version
         FROM daily_frequent_snapshots
         WHERE snapshot_date = ?
         """,
         (snapshot_date_text,),
     ).fetchone()
-    if existing is not None:
+    if (
+        existing is not None
+        and existing["rules_version"] == FREQUENT_SNAPSHOT_RULE_VERSION
+    ):
         return
+    if existing is not None:
+        connection.execute(
+            "DELETE FROM daily_frequent_snapshots WHERE snapshot_date = ?",
+            (snapshot_date_text,),
+        )
 
-    start_date = frequent_activity_start_date(snapshot_date)
-    account_activity = list_account_recent_activity(connection, start_date)
-    category_activity = list_category_recent_activity(connection, start_date)
+    account_activity = list_account_recent_activity(
+        connection,
+        activity_start_date(snapshot_date, ACCOUNT_ACTIVITY_WINDOW_DAYS),
+        activity_start_date(snapshot_date, ACCOUNT_RECENT_WINDOW_DAYS),
+    )
+    category_activity = list_category_recent_activity(
+        connection,
+        activity_start_date(snapshot_date, CATEGORY_ACTIVITY_WINDOW_DAYS),
+    )
 
     connection.execute(
-        "INSERT INTO daily_frequent_snapshots (snapshot_date) VALUES (?)",
-        (snapshot_date_text,),
+        """
+        INSERT INTO daily_frequent_snapshots (snapshot_date, rules_version)
+        VALUES (?, ?)
+        """,
+        (snapshot_date_text, FREQUENT_SNAPSHOT_RULE_VERSION),
     )
     account_rows = [
         (
@@ -1451,6 +1561,7 @@ def ensure_daily_frequent_snapshot(connection, snapshot_date: date) -> None:
             account_id,
             activity_key,
             activity["record_count"],
+            activity["recent_record_count"],
             activity["last_transaction_date"],
         )
         for account_id, activity_by_key in account_activity.items()
@@ -1462,8 +1573,8 @@ def ensure_daily_frequent_snapshot(connection, snapshot_date: date) -> None:
             """
             INSERT INTO daily_account_frequent_activity (
                 snapshot_date, account_id, activity_key,
-                record_count, last_transaction_date
-            ) VALUES (?, ?, ?, ?, ?)
+                record_count, recent_record_count, last_transaction_date
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             account_rows,
         )
@@ -1495,7 +1606,12 @@ def list_daily_account_frequent_activity(
 ) -> dict[int, dict[str, dict[str, Any]]]:
     rows = connection.execute(
         """
-        SELECT account_id, activity_key, record_count, last_transaction_date
+        SELECT
+            account_id,
+            activity_key,
+            record_count,
+            recent_record_count,
+            last_transaction_date
         FROM daily_account_frequent_activity
         WHERE snapshot_date = ?
         """,
@@ -1504,9 +1620,10 @@ def list_daily_account_frequent_activity(
     result: dict[int, dict[str, dict[str, Any]]] = {}
     for row in rows:
         activity = result.setdefault(row["account_id"], empty_account_recent_activity())
-        activity[row["activity_key"]] = serialize_recent_activity(
+        activity[row["activity_key"]] = serialize_account_recent_activity(
             row["record_count"],
             row["last_transaction_date"],
+            row["recent_record_count"],
         )
     return result
 
@@ -1534,22 +1651,30 @@ def list_daily_category_frequent_activity(
 
 @app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return FileResponse(
+        STATIC_DIR / "compass-rose.svg",
+        media_type="image/svg+xml",
+    )
 
 
 @app.get("/overview", include_in_schema=False)
 def overview():
-    return FileResponse(STATIC_DIR / "overview.html")
+    return FileResponse(STATIC_DIR / "overview.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/accounts", include_in_schema=False)
 def accounts_page():
-    return FileResponse(STATIC_DIR / "accounts.html")
+    return FileResponse(STATIC_DIR / "accounts.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/investments", include_in_schema=False)
 def investments_page():
-    return FileResponse(STATIC_DIR / "investment.html")
+    return FileResponse(STATIC_DIR / "investment.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/health")
@@ -1841,7 +1966,7 @@ def account_detail(
             "offset": offset,
             "total": total_row["total"],
         },
-        "transactions": transactions,
+        "transactions": annotate_transactions(transactions),
     }
 
 
@@ -2669,6 +2794,7 @@ def create_expense(expense: ExpenseCreate):
     create_backup()
 
     with connect() as connection:
+        require_system(connection, expense.budget_system_id)
         account = get_active_account(connection, expense.source_account_id, "支付账户")
         category = get_active_category(connection, expense.category_id, "expense")
 
@@ -2682,8 +2808,9 @@ def create_expense(expense: ExpenseCreate):
                 outflow_minor,
                 category_id,
                 counterparty,
-                note
-            ) VALUES (?, 'expense', ?, ?, ?, ?, ?)
+                note,
+                budget_system_id
+            ) VALUES (?, 'expense', ?, ?, ?, ?, ?, ?)
             """,
             (
                 expense.transaction_date.isoformat(),
@@ -2692,6 +2819,7 @@ def create_expense(expense: ExpenseCreate):
                 expense.category_id,
                 clean_optional_text(expense.counterparty),
                 clean_optional_text(expense.note),
+                expense.budget_system_id,
             ),
         )
 
@@ -2702,6 +2830,7 @@ def create_expense(expense: ExpenseCreate):
         "currency_code": account["currency_code"],
         "amount": format_minor(amount_minor, account["decimal_places"]),
         "category_name": category["name"],
+        "budget_system_id": expense.budget_system_id,
     }
 
 
@@ -2710,6 +2839,7 @@ def create_income(income: IncomeCreate):
     create_backup()
 
     with connect() as connection:
+        require_system(connection, income.budget_system_id)
         account = get_active_account(connection, income.destination_account_id, "到账账户")
         category = get_active_category(connection, income.category_id, "income")
         amount_minor = amount_to_minor(income.amount, account["decimal_places"])
@@ -2722,8 +2852,9 @@ def create_income(income: IncomeCreate):
                 inflow_minor,
                 category_id,
                 counterparty,
-                note
-            ) VALUES (?, 'income', ?, ?, ?, ?, ?)
+                note,
+                budget_system_id
+            ) VALUES (?, 'income', ?, ?, ?, ?, ?, ?)
             """,
             (
                 income.transaction_date.isoformat(),
@@ -2732,6 +2863,7 @@ def create_income(income: IncomeCreate):
                 income.category_id,
                 clean_optional_text(income.counterparty),
                 clean_optional_text(income.note),
+                income.budget_system_id,
             ),
         )
 
@@ -2742,6 +2874,7 @@ def create_income(income: IncomeCreate):
         "currency_code": account["currency_code"],
         "amount": format_minor(amount_minor, account["decimal_places"]),
         "category_name": category["name"],
+        "budget_system_id": income.budget_system_id,
     }
 
 
@@ -2903,7 +3036,7 @@ def list_transactions(limit: int = Query(default=20, ge=1, le=100)):
                 "note": row["note"],
             }
         )
-    return result
+    return annotate_transactions(result)
 
 
 def build_transaction_search_filters(
@@ -2973,6 +3106,7 @@ def search_transactions(
     flagged_only: bool = False,
     limit: int = 50,
     offset: int = 0,
+    budget_system_id: int | None = None,
 ):
     start_date = validate_optional_date(start_date, "开始日期")
     end_date = validate_optional_date(end_date, "结束日期")
@@ -3007,6 +3141,7 @@ def search_transactions(
         manual_adjustments_only,
         flagged_only,
     )
+    budget_filter_sql(filters, parameters, budget_system_id)
     where_clause = f" WHERE {' AND '.join(filters)}" if filters else ""
 
     transaction_query = """
@@ -3159,6 +3294,7 @@ def search_transactions(
             "start_date": start_date,
             "end_date": end_date,
             "transaction_types": transaction_types,
+            "budget_system_id": budget_system_id,
             "category_ids": category_ids,
             "keyword": keyword,
             "manual_adjustments_only": manual_adjustments_only,
@@ -3170,7 +3306,7 @@ def search_transactions(
             "total": total_row["total"],
         },
         "summary": summary,
-        "transactions": transactions,
+        "transactions": annotate_transactions(transactions),
     }
 
 
@@ -3178,98 +3314,6 @@ def analysis_calendar_month_count(start_date: str, end_date: str) -> int:
     start = date.fromisoformat(start_date)
     end = date.fromisoformat(end_date)
     return (end.year - start.year) * 12 + end.month - start.month + 1
-
-
-def analysis_main_amount(row) -> dict[str, Any]:
-    transaction_type = row["transaction_type"]
-    if transaction_type == "income" or (
-        transaction_type == "adjustment" and row["inflow_minor"] is not None
-    ):
-        return {
-            "amount": amount_from_minor(
-                row["inflow_minor"],
-                row["destination_decimal_places"],
-            ),
-            "currency_code": row["destination_currency_code"],
-            "account_name": row["destination_account_name"] or "外部",
-            "direction": "调增" if transaction_type == "adjustment" else None,
-        }
-    return {
-        "amount": amount_from_minor(
-            row["outflow_minor"],
-            row["source_decimal_places"],
-        ),
-        "currency_code": row["source_currency_code"],
-        "account_name": row["source_account_name"] or "外部",
-        "direction": "调减" if transaction_type == "adjustment" else None,
-    }
-
-
-def nearest_cny_exchange_rate(
-    rate_rows,
-    transaction_date: str,
-):
-    target_date = date.fromisoformat(transaction_date)
-    return min(
-        rate_rows,
-        key=lambda row: (
-            abs((date.fromisoformat(row["rate_date"]) - target_date).days),
-            0 if row["rate_date"] <= transaction_date else 1,
-        ),
-    )
-
-
-def amount_to_base_currency(
-    amount: Decimal,
-    currency_code: str,
-    transaction_date: str,
-    rate_rows,
-    base_currency_code: str,
-) -> tuple[Decimal | None, str | None]:
-    if currency_code == base_currency_code:
-        return amount, "direct"
-    if (
-        base_currency_code not in BASE_CURRENCY_CODES
-        or currency_code not in {"CNY", "HKD", "USD"}
-        or not rate_rows
-    ):
-        return None, None
-    rate = nearest_cny_exchange_rate(rate_rows, transaction_date)
-    try:
-        hkd_cny_rate = Decimal(rate["hkd_cny_rate"])
-        usd_cny_rate = Decimal(rate["usd_cny_rate"])
-    except InvalidOperation:
-        return None, None
-    if hkd_cny_rate <= 0 or usd_cny_rate <= 0:
-        return None, None
-    if base_currency_code == "CNY":
-        converted = (
-            amount * hkd_cny_rate
-            if currency_code == "HKD"
-            else amount * usd_cny_rate
-        )
-    else:
-        converted = (
-            amount / hkd_cny_rate
-            if currency_code == "CNY"
-            else amount * usd_cny_rate / hkd_cny_rate
-        )
-    return converted, "exact" if rate["rate_date"] == transaction_date else "nearest"
-
-
-def amount_to_hkd(
-    amount: Decimal,
-    currency_code: str,
-    transaction_date: str,
-    rate_rows,
-) -> tuple[Decimal | None, str | None]:
-    return amount_to_base_currency(
-        amount,
-        currency_code,
-        transaction_date,
-        rate_rows,
-        "HKD",
-    )
 
 
 def new_flow_totals() -> dict[str, Decimal]:
@@ -3536,285 +3580,6 @@ def build_transaction_search_summary(
     }
 
 
-def nice_hkd_bucket_width(target_width: Decimal) -> int:
-    """Return a 1/2/5-based integer HKD bucket width near the target width."""
-    target_width = max(target_width, Decimal(1))
-    exponent = max(target_width.adjusted(), 0)
-    candidates = [
-        multiplier * (10**power)
-        for power in range(max(0, exponent - 2), exponent + 3)
-        for multiplier in (1, 2, 5)
-    ]
-    return min(
-        candidates,
-        key=lambda candidate: (abs(Decimal(candidate) - target_width), candidate),
-    )
-
-
-def next_nice_hkd_bucket_width(current_width: int) -> int:
-    exponent = len(str(current_width))
-    candidates = [
-        multiplier * (10**power)
-        for power in range(0, exponent + 2)
-        for multiplier in (1, 2, 5)
-    ]
-    return min(candidate for candidate in candidates if candidate > current_width)
-
-
-def hkd_bucket_bounds(
-    minimum: Decimal,
-    maximum: Decimal,
-    width: int,
-) -> tuple[int, int]:
-    lower = int(minimum // width) * width
-    upper = int(maximum // width) * width
-    if Decimal(upper) < maximum:
-        upper += width
-    if lower == upper:
-        upper += width
-    return lower, upper
-
-
-def build_hkd_histogram(daily_amounts: list[Decimal]) -> list[dict[str, Any]]:
-    if not daily_amounts:
-        return []
-    minimum = min(daily_amounts)
-    maximum = max(daily_amounts)
-    target_bin_count = min(8, max(2, round(len(daily_amounts) ** 0.5)))
-    target_width = max((maximum - minimum) / Decimal(target_bin_count), Decimal(1))
-    width = nice_hkd_bucket_width(target_width)
-    lower, upper = hkd_bucket_bounds(minimum, maximum, width)
-
-    while (upper - lower) // width > 8:
-        width = next_nice_hkd_bucket_width(width)
-        lower, upper = hkd_bucket_bounds(minimum, maximum, width)
-
-    bin_count = (upper - lower) // width
-    counts = [0] * bin_count
-    for amount in daily_amounts:
-        index = min(int((amount - Decimal(lower)) // width), bin_count - 1)
-        counts[index] += 1
-    return [
-        {
-            "start": lower + width * index,
-            "end": lower + width * (index + 1),
-            "count": counts[index],
-        }
-        for index in range(bin_count)
-    ]
-
-
-def build_transaction_analysis(
-    rows,
-    rate_rows,
-    start_date: str,
-    end_date: str,
-    transaction_type: str,
-) -> dict[str, Any]:
-    converted_records = []
-    rate_coverage = {
-        "direct_hkd_count": 0,
-        "exact_rate_count": 0,
-        "nearest_rate_count": 0,
-        "excluded_count": 0,
-        "missing_currencies": set(),
-    }
-
-    for row in rows:
-        main_amount = analysis_main_amount(row)
-        amount_hkd, rate_status = amount_to_hkd(
-            main_amount["amount"],
-            main_amount["currency_code"],
-            row["transaction_date"],
-            rate_rows,
-        )
-        if amount_hkd is None:
-            rate_coverage["excluded_count"] += 1
-            rate_coverage["missing_currencies"].add(main_amount["currency_code"])
-            continue
-        if rate_status == "direct":
-            rate_coverage["direct_hkd_count"] += 1
-        elif rate_status == "exact":
-            rate_coverage["exact_rate_count"] += 1
-        else:
-            rate_coverage["nearest_rate_count"] += 1
-        converted_records.append(
-            {
-                "transaction_date": row["transaction_date"],
-                "amount_hkd": amount_hkd,
-                "category_name": row["category_name"] or "未分类",
-                "account_name": main_amount["account_name"],
-                "direction": main_amount["direction"],
-            }
-        )
-
-    daily_totals: dict[str, dict[str, Any]] = {}
-    category_totals: dict[str, dict[str, Any]] = {}
-    account_totals: dict[str, dict[str, Any]] = {}
-    weekday_totals = [
-        {
-            "weekday": index,
-            "label": label,
-            "amount": Decimal(0),
-            "active_day_count": 0,
-        }
-        for index, label in enumerate(WEEKDAY_LABELS)
-    ]
-    direction_totals: dict[str, dict[str, Any]] = {}
-    for record in converted_records:
-        day = daily_totals.setdefault(
-            record["transaction_date"],
-            {"amount": Decimal(0), "count": 0},
-        )
-        day["amount"] += record["amount_hkd"]
-        day["count"] += 1
-
-        category = category_totals.setdefault(
-            record["category_name"],
-            {"amount": Decimal(0), "count": 0},
-        )
-        category["amount"] += record["amount_hkd"]
-        category["count"] += 1
-
-        account = account_totals.setdefault(
-            record["account_name"],
-            {"amount": Decimal(0), "count": 0},
-        )
-        account["amount"] += record["amount_hkd"]
-        account["count"] += 1
-
-        if record["direction"]:
-            direction = direction_totals.setdefault(
-                record["direction"],
-                {"amount": Decimal(0), "count": 0},
-            )
-            direction["amount"] += record["amount_hkd"]
-            direction["count"] += 1
-
-    daily_amounts = [values["amount"] for values in daily_totals.values()]
-    for transaction_date, values in daily_totals.items():
-        weekday = weekday_totals[date.fromisoformat(transaction_date).weekday()]
-        weekday["amount"] += values["amount"]
-        weekday["active_day_count"] += 1
-
-    statistics = None
-    if daily_amounts:
-        total = sum(daily_amounts, Decimal(0))
-        active_day_count = len(daily_amounts)
-        range_day_count = (
-            date.fromisoformat(end_date) - date.fromisoformat(start_date)
-        ).days + 1
-        active_day_mean = total / active_day_count
-        calendar_day_mean = total / range_day_count
-        sorted_daily_amounts = sorted(daily_amounts)
-        middle = active_day_count // 2
-        median = (
-            sorted_daily_amounts[middle]
-            if active_day_count % 2
-            else (
-                sorted_daily_amounts[middle - 1] + sorted_daily_amounts[middle]
-            )
-            / 2
-        )
-        variance = sum(
-            ((amount - active_day_mean) ** 2 for amount in daily_amounts),
-            Decimal(0),
-        ) / active_day_count
-        maximum_day_date, maximum_day = max(
-            daily_totals.items(),
-            key=lambda item: (item[1]["amount"], item[0]),
-        )
-        statistics = {
-            "total_amount": format_decimal(total, 2),
-            "converted_transaction_count": len(converted_records),
-            "active_day_count": active_day_count,
-            "range_day_count": range_day_count,
-            "calendar_day_mean": format_decimal(calendar_day_mean, 2),
-            "active_day_mean": format_decimal(active_day_mean, 2),
-            "median_daily_amount": format_decimal(median, 2),
-            "minimum_daily_amount": format_decimal(min(daily_amounts), 2),
-            "maximum_daily_amount": format_decimal(max(daily_amounts), 2),
-            "population_daily_variance": format_decimal(variance, 4),
-            "population_daily_standard_deviation": format_decimal(
-                variance.sqrt(),
-                2,
-            ),
-            "maximum_day_date": maximum_day_date,
-            "maximum_day_amount": format_decimal(maximum_day["amount"], 2),
-        }
-
-    def serialize_distribution(
-        items: dict[str, dict[str, Any]],
-        include_amount_share: bool = False,
-    ) -> list[dict[str, Any]]:
-        total_amount = sum(
-            (values["amount"] for values in items.values()),
-            Decimal(0),
-        )
-        return [
-            {
-                "name": name,
-                "amount": format_decimal(values["amount"], 2),
-                "count": values["count"],
-                **(
-                    {
-                        "amount_share": format_decimal(
-                            values["amount"] * Decimal(100) / total_amount,
-                            1,
-                        ),
-                    }
-                    if include_amount_share and total_amount
-                    else {}
-                ),
-            }
-            for name, values in sorted(
-                items.items(),
-                key=lambda item: (-item[1]["amount"], item[0]),
-            )
-        ]
-
-    return {
-        "transaction_type": transaction_type,
-        "transaction_type_label": TRANSACTION_TYPE_LABELS[transaction_type],
-        "main_amount_label": TRANSACTION_ANALYSIS_AMOUNT_LABELS[transaction_type],
-        "account_label": TRANSACTION_ANALYSIS_ACCOUNT_LABELS[transaction_type],
-        "currency_code": "HKD",
-        "matched_transaction_count": len(rows),
-        "rate_coverage": {
-            "direct_hkd_count": rate_coverage["direct_hkd_count"],
-            "exact_rate_count": rate_coverage["exact_rate_count"],
-            "nearest_rate_count": rate_coverage["nearest_rate_count"],
-            "excluded_count": rate_coverage["excluded_count"],
-            "missing_currencies": sorted(rate_coverage["missing_currencies"]),
-        },
-        "daily_totals": [
-            {
-                "transaction_date": transaction_date,
-                "amount": format_decimal(values["amount"], 2),
-                "count": values["count"],
-            }
-            for transaction_date, values in sorted(daily_totals.items())
-        ],
-        "statistics": statistics,
-        "histogram": build_hkd_histogram(daily_amounts),
-        "weekday_distribution": [
-            {
-                "weekday": item["weekday"],
-                "label": item["label"],
-                "amount": format_decimal(item["amount"], 2),
-                "active_day_count": item["active_day_count"],
-            }
-            for item in weekday_totals
-        ],
-        "category_distribution": serialize_distribution(
-            category_totals,
-            include_amount_share=True,
-        ),
-        "account_distribution": serialize_distribution(account_totals),
-        "direction_distribution": serialize_distribution(direction_totals),
-    }
-
-
 @app.get("/api/transactions/analysis")
 def transaction_analysis(
     transaction_type: str,
@@ -3825,6 +3590,7 @@ def transaction_analysis(
     keyword: str | None = None,
     manual_adjustments_only: bool = False,
     flagged_only: bool = False,
+    budget_system_id: int | None = None,
 ):
     start_date = validate_optional_date(start_date, "开始日期")
     end_date = validate_optional_date(end_date, "结束日期")
@@ -3882,6 +3648,7 @@ def transaction_analysis(
         search_term = f"%{keyword}%"
         parameters.extend([search_term] * 5)
 
+    budget_filter_sql(filters, parameters, budget_system_id)
     where_clause = f" WHERE {' AND '.join(filters)}"
     with connect() as connection:
         if account_id is not None:
@@ -3937,6 +3704,7 @@ def transaction_analysis(
     )
     result["filters"] = {
         "account_id": account_id,
+        "budget_system_id": budget_system_id,
         "start_date": start_date,
         "end_date": end_date,
         "transaction_type": transaction_type,
@@ -3954,7 +3722,7 @@ def get_transaction(transaction_id: int):
         snapshot = fetch_transaction_snapshot(connection, transaction_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="流水不存在。")
-    return format_transaction_for_edit(snapshot)
+    return annotate_transactions([format_transaction_for_edit(snapshot)])[0]
 
 
 @app.put("/api/transactions/{transaction_id}")
@@ -3975,10 +3743,16 @@ def update_transaction(transaction_id: int, transaction: TransactionUpdate):
 
     backup_path = create_backup()
     with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         current = fetch_transaction_snapshot(connection, transaction_id)
         if current is None:
             raise HTTPException(status_code=404, detail="流水不存在。")
         payload = normalize_transaction_update(connection, transaction, current)
+        budget_id = transaction.budget_system_id if 'budget_system_id' in transaction.model_fields_set else current.get('budget_system_id')
+        if payload['transaction_type'] not in ('income','expense'):
+            budget_id = None
+        require_system(connection, budget_id, allow_inactive=budget_id == current.get('budget_system_id'))
+        offset_before = check_member_update(connection, transaction_id, payload["transaction_type"])
         connection.execute(
             """
             UPDATE transactions
@@ -4007,6 +3781,7 @@ def update_transaction(transaction_id: int, transaction: TransactionUpdate):
                 transaction_id,
             ),
         )
+        connection.execute('UPDATE transactions SET budget_system_id=? WHERE id=?', (budget_id,transaction_id))
         updated = fetch_transaction_snapshot(connection, transaction_id)
         write_audit_log(
             connection,
@@ -4018,6 +3793,7 @@ def update_transaction(transaction_id: int, transaction: TransactionUpdate):
             before=current,
             after=updated,
         )
+        record_member_update(connection, offset_before, backup_path.name)
     return format_transaction_for_edit(updated)
 
 
@@ -4040,6 +3816,10 @@ def delete_transaction(transaction_id: int, deletion: TransactionDelete):
 
     backup_path = create_backup()
     with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        group_id = group_for_transaction(connection, transaction_id)
+        if group_id is not None:
+            raise HTTPException(409, f"请先从冲销事项 #{group_id} 移除此流水，或解散事项。")
         current = fetch_transaction_snapshot(connection, transaction_id)
         if current is None:
             raise HTTPException(status_code=404, detail="流水不存在。")
@@ -4131,124 +3911,77 @@ def delete_transaction_flag(transaction_id: int):
 
 
 @app.get("/api/dashboard")
-def dashboard(month: str | None = None):
+def dashboard(month: str | None = None, basis: str = "raw"):
+    with connect() as connection:
+        connection.execute("BEGIN")
+        return dashboard_data(month, basis, connection)
+
+
+def dashboard_data(month, basis, connection):
+    if basis not in {"raw", "offset"}:
+        raise HTTPException(422, "统计口径不支持。")
     selected_month = (
         validate_month(month)
         if month
         else today_in_shanghai().strftime("%Y-%m")
     )
     as_of_date = month_as_of_date(selected_month)
-    with connect() as connection:
-        cash_flow_rows = connection.execute(
-            """
-            WITH activity AS (
-                SELECT
-                    source.currency_code,
-                    0 AS income_minor,
-                    transactions.outflow_minor AS expense_minor
-                FROM transactions
-                JOIN accounts AS source ON source.id = transactions.source_account_id
-                WHERE transactions.transaction_type = 'expense'
-                  AND strftime('%Y-%m', transactions.transaction_date) = ?
-
-                UNION ALL
-
-                SELECT
-                    destination.currency_code,
-                    transactions.inflow_minor AS income_minor,
-                    0 AS expense_minor
-                FROM transactions
-                JOIN accounts AS destination ON destination.id = transactions.destination_account_id
-                WHERE transactions.transaction_type = 'income'
-                  AND strftime('%Y-%m', transactions.transaction_date) = ?
-            )
+    personal_summary = None
+    if basis == "offset":
+        entries = filter_entries(build_entries(*read_ledger(connection)), start_date=selected_month + "-01", end_date=as_of_date)
+        personal_summary = summarize_personal(entries)
+    cash_flow_rows = connection.execute(
+        """
+        WITH activity AS (
             SELECT
-                currencies.code,
-                currencies.decimal_places,
-                COALESCE(SUM(activity.income_minor), 0) AS income_minor,
-                COALESCE(SUM(activity.expense_minor), 0) AS expense_minor
-            FROM currencies
-            LEFT JOIN activity ON activity.currency_code = currencies.code
-            WHERE currencies.is_active = 1
-            GROUP BY currencies.code, currencies.decimal_places
-            HAVING income_minor != 0 OR expense_minor != 0
-            ORDER BY currencies.code
-            """,
-            (selected_month, selected_month),
-        ).fetchall()
-        account_rows = account_balance_rows_as_of(connection, as_of_date)
-        current_rate_row = get_daily_cny_exchange_rate_as_of(
-            connection,
-            as_of_date,
-        )
-        internal_movement_summary_rows = connection.execute(
-            """
-            WITH movement_legs AS (
-                SELECT
-                    transactions.id AS transaction_id,
-                    source.currency_code,
-                    transactions.outflow_minor,
-                    0 AS inflow_minor
-                FROM transactions
-                JOIN accounts AS source ON source.id = transactions.source_account_id
-                WHERE transactions.transaction_type IN (
-                    'transfer',
-                    'fx_exchange',
-                    'broker_deposit',
-                    'broker_withdrawal'
-                )
-                  AND strftime('%Y-%m', transactions.transaction_date) = ?
-
-                UNION ALL
-
-                SELECT
-                    transactions.id AS transaction_id,
-                    destination.currency_code,
-                    0 AS outflow_minor,
-                    transactions.inflow_minor
-                FROM transactions
-                JOIN accounts AS destination ON destination.id = transactions.destination_account_id
-                WHERE transactions.transaction_type IN (
-                    'transfer',
-                    'fx_exchange',
-                    'broker_deposit',
-                    'broker_withdrawal'
-                )
-                  AND strftime('%Y-%m', transactions.transaction_date) = ?
-            )
-            SELECT
-                movement_legs.currency_code,
-                currencies.decimal_places,
-                SUM(movement_legs.outflow_minor) AS outflow_minor,
-                SUM(movement_legs.inflow_minor) AS inflow_minor,
-                COUNT(DISTINCT movement_legs.transaction_id) AS transaction_count
-            FROM movement_legs
-            JOIN currencies ON currencies.code = movement_legs.currency_code
-            GROUP BY movement_legs.currency_code, currencies.decimal_places
-            ORDER BY movement_legs.currency_code
-            """,
-            (selected_month, selected_month),
-        ).fetchall()
-        internal_movement_rows = connection.execute(
-            """
-            SELECT
-                transactions.id,
-                transactions.transaction_date,
-                transactions.transaction_type,
-                transactions.outflow_minor,
-                transactions.inflow_minor,
-                transactions.note,
-                source.name AS source_account_name,
-                source.currency_code AS source_currency_code,
-                source_currency.decimal_places AS source_decimal_places,
-                destination.name AS destination_account_name,
-                destination.currency_code AS destination_currency_code,
-                destination_currency.decimal_places AS destination_decimal_places
+                source.currency_code,
+                0 AS income_minor,
+                transactions.outflow_minor AS expense_minor
             FROM transactions
             JOIN accounts AS source ON source.id = transactions.source_account_id
-            JOIN currencies AS source_currency ON source_currency.code = source.currency_code
+            WHERE transactions.transaction_type = 'expense'
+              AND strftime('%Y-%m', transactions.transaction_date) = ?
+
+            UNION ALL
+
+            SELECT
+                destination.currency_code,
+                transactions.inflow_minor AS income_minor,
+                0 AS expense_minor
+            FROM transactions
             JOIN accounts AS destination ON destination.id = transactions.destination_account_id
-            JOIN currencies AS destination_currency ON destination_currency.code = destination.currency_code
+            WHERE transactions.transaction_type = 'income'
+              AND strftime('%Y-%m', transactions.transaction_date) = ?
+        )
+        SELECT
+            currencies.code,
+            currencies.decimal_places,
+            COALESCE(SUM(activity.income_minor), 0) AS income_minor,
+            COALESCE(SUM(activity.expense_minor), 0) AS expense_minor
+        FROM currencies
+        LEFT JOIN activity ON activity.currency_code = currencies.code
+        WHERE currencies.is_active = 1
+        GROUP BY currencies.code, currencies.decimal_places
+        HAVING income_minor != 0 OR expense_minor != 0
+        ORDER BY currencies.code
+        """,
+        (selected_month, selected_month),
+    ).fetchall()
+    account_rows = account_balance_rows_as_of(connection, as_of_date)
+    current_rate_row = get_daily_cny_exchange_rate_as_of(
+        connection,
+        as_of_date,
+    )
+    internal_movement_summary_rows = connection.execute(
+        """
+        WITH movement_legs AS (
+            SELECT
+                transactions.id AS transaction_id,
+                source.currency_code,
+                transactions.outflow_minor,
+                0 AS inflow_minor
+            FROM transactions
+            JOIN accounts AS source ON source.id = transactions.source_account_id
             WHERE transactions.transaction_type IN (
                 'transfer',
                 'fx_exchange',
@@ -4256,10 +3989,68 @@ def dashboard(month: str | None = None):
                 'broker_withdrawal'
             )
               AND strftime('%Y-%m', transactions.transaction_date) = ?
-            ORDER BY transactions.transaction_date DESC, transactions.id DESC
-            """,
-            (selected_month,),
-        ).fetchall()
+
+            UNION ALL
+
+            SELECT
+                transactions.id AS transaction_id,
+                destination.currency_code,
+                0 AS outflow_minor,
+                transactions.inflow_minor
+            FROM transactions
+            JOIN accounts AS destination ON destination.id = transactions.destination_account_id
+            WHERE transactions.transaction_type IN (
+                'transfer',
+                'fx_exchange',
+                'broker_deposit',
+                'broker_withdrawal'
+            )
+              AND strftime('%Y-%m', transactions.transaction_date) = ?
+        )
+        SELECT
+            movement_legs.currency_code,
+            currencies.decimal_places,
+            SUM(movement_legs.outflow_minor) AS outflow_minor,
+            SUM(movement_legs.inflow_minor) AS inflow_minor,
+            COUNT(DISTINCT movement_legs.transaction_id) AS transaction_count
+        FROM movement_legs
+        JOIN currencies ON currencies.code = movement_legs.currency_code
+        GROUP BY movement_legs.currency_code, currencies.decimal_places
+        ORDER BY movement_legs.currency_code
+        """,
+        (selected_month, selected_month),
+    ).fetchall()
+    internal_movement_rows = connection.execute(
+        """
+        SELECT
+            transactions.id,
+            transactions.transaction_date,
+            transactions.transaction_type,
+            transactions.outflow_minor,
+            transactions.inflow_minor,
+            transactions.note,
+            source.name AS source_account_name,
+            source.currency_code AS source_currency_code,
+            source_currency.decimal_places AS source_decimal_places,
+            destination.name AS destination_account_name,
+            destination.currency_code AS destination_currency_code,
+            destination_currency.decimal_places AS destination_decimal_places
+        FROM transactions
+        JOIN accounts AS source ON source.id = transactions.source_account_id
+        JOIN currencies AS source_currency ON source_currency.code = source.currency_code
+        JOIN accounts AS destination ON destination.id = transactions.destination_account_id
+        JOIN currencies AS destination_currency ON destination_currency.code = destination.currency_code
+        WHERE transactions.transaction_type IN (
+            'transfer',
+            'fx_exchange',
+            'broker_deposit',
+            'broker_withdrawal'
+        )
+          AND strftime('%Y-%m', transactions.transaction_date) = ?
+        ORDER BY transactions.transaction_date DESC, transactions.id DESC
+        """,
+        (selected_month,),
+    ).fetchall()
 
     cash_flow = [
         {
@@ -4360,6 +4151,8 @@ def dashboard(month: str | None = None):
         for row in internal_movement_rows
     ]
     return {
+        "basis": basis,
+        "personal_cash_flow": personal_summary,
         "month": selected_month,
         "as_of_date": as_of_date,
         "cash_flow": cash_flow,
@@ -4408,7 +4201,9 @@ def autosize_columns(worksheet) -> None:
         worksheet.column_dimensions[letter].width = min(max(longest + 2, 10), 32)
 
 
-def build_excel_export(selected_month: str) -> BytesIO:
+def build_excel_export(selected_month: str, basis: str = "raw") -> BytesIO:
+    if basis not in {"raw", "offset"}:
+        raise HTTPException(422, "统计口径不支持。")
     try:
         from openpyxl import Workbook
     except ImportError as exc:
@@ -4418,10 +4213,13 @@ def build_excel_export(selected_month: str) -> BytesIO:
         ) from exc
 
     with connect() as connection:
-        dashboard_data = dashboard(selected_month)
+        connection.execute("BEGIN")
+        export_records, export_groups, export_rates = read_ledger(connection)
+        export_entries = build_entries(export_records, export_groups, export_rates)
+        dashboard_result = dashboard_data(selected_month, "raw", connection)
         account_rows = account_balance_rows_as_of(
             connection,
-            dashboard_data["as_of_date"],
+            dashboard_result["as_of_date"],
             active_only=False,
         )
         transaction_rows = connection.execute(
@@ -4452,6 +4250,7 @@ def build_excel_export(selected_month: str) -> BytesIO:
             """
             SELECT
                 monthly_budgets.budget_month,
+                monthly_budgets.category_id,
                 monthly_budgets.currency_code,
                 categories.name AS category,
                 monthly_budgets.amount_minor AS budget_minor,
@@ -4526,13 +4325,13 @@ def build_excel_export(selected_month: str) -> BytesIO:
         ["币种", "收入", "支出", "当月结余", "可用现金", "资产", "负债", "净资产"],
     )
     summary_by_currency = {
-        item["currency_code"]: item for item in dashboard_data["cash_flow"]
+        item["currency_code"]: item for item in dashboard_result["cash_flow"]
     }
     available_cash_by_currency = {
-        item["currency_code"]: item for item in dashboard_data["available_cash"]
+        item["currency_code"]: item for item in dashboard_result["available_cash"]
     }
     worth_by_currency = {
-        item["currency_code"]: item for item in dashboard_data["net_worth"]
+        item["currency_code"]: item for item in dashboard_result["net_worth"]
     }
     for row_number, currency_code in enumerate(
         sorted(set(summary_by_currency) | set(available_cash_by_currency) | set(worth_by_currency)),
@@ -4557,7 +4356,7 @@ def build_excel_export(selected_month: str) -> BytesIO:
 
     base_currency = workbook.create_sheet("本币总统计")
     sheet_title(base_currency, "人民币与港币计价资产、负债与净资产", 8)
-    base_currency["A2"] = f"统计截至：{dashboard_data['as_of_date']}"
+    base_currency["A2"] = f"统计截至：{dashboard_result['as_of_date']}"
     sheet_headers(
         base_currency,
         [
@@ -4571,7 +4370,7 @@ def build_excel_export(selected_month: str) -> BytesIO:
             "数据源",
         ],
     )
-    for item in dashboard_data["base_currency_totals"]:
+    for item in dashboard_result["base_currency_totals"]:
         rate = item["rate"] or {}
         base_currency.append(
             [
@@ -4669,7 +4468,7 @@ def build_excel_export(selected_month: str) -> BytesIO:
         internal_movements_sheet,
         ["币种", "内部转出", "内部转入", "涉及笔数"],
     )
-    for item in dashboard_data["internal_movement_summary"]:
+    for item in dashboard_result["internal_movement_summary"]:
         internal_movements_sheet.append(
             [
                 item["currency_code"],
@@ -4684,7 +4483,7 @@ def build_excel_export(selected_month: str) -> BytesIO:
         ["日期", "类型", "来源账户", "转出金额", "去向账户", "收到金额"],
         row=detail_header_row,
     )
-    for item in dashboard_data["internal_movements"]:
+    for item in dashboard_result["internal_movements"]:
         internal_movements_sheet.append(
             [
                 item["transaction_date"],
@@ -4813,6 +4612,9 @@ def build_excel_export(selected_month: str) -> BytesIO:
         )
     autosize_columns(settings)
 
+    from app.offset_export import append_offset_sheets
+    append_offset_sheets(workbook, export_entries, export_rates, budget_rows, currency_places,
+                         selected_month, dashboard_result["as_of_date"], basis)
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
@@ -4820,9 +4622,9 @@ def build_excel_export(selected_month: str) -> BytesIO:
 
 
 @app.get("/api/export.xlsx")
-def export_excel(month: str | None = None):
+def export_excel(month: str | None = None, basis: str = "raw"):
     selected_month = validate_month(month) if month else date.today().strftime("%Y-%m")
-    output = build_excel_export(selected_month)
+    output = build_excel_export(selected_month, basis)
     filename = quote(f"个人财务账本-{selected_month}.xlsx")
     return StreamingResponse(
         output,

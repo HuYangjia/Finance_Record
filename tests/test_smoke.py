@@ -242,19 +242,35 @@ class FinanceAppSmokeTest(unittest.TestCase):
             }
             self.assertEqual(
                 account_activity["CNY-BANK-01"]["expense_source"],
-                {"record_count": 2, "last_transaction_date": "2026-09-08"},
+                {
+                    "record_count": 2,
+                    "recent_record_count": 2,
+                    "last_transaction_date": "2026-09-08",
+                },
             )
             self.assertEqual(
                 account_activity["CNY-BANK-01"]["income_destination"],
-                {"record_count": 1, "last_transaction_date": "2026-09-08"},
+                {
+                    "record_count": 1,
+                    "recent_record_count": 1,
+                    "last_transaction_date": "2026-09-08",
+                },
             )
             self.assertEqual(
                 account_activity["CNY-BANK-01"]["movement_source"],
-                {"record_count": 1, "last_transaction_date": "2026-09-08"},
+                {
+                    "record_count": 1,
+                    "recent_record_count": 1,
+                    "last_transaction_date": "2026-09-08",
+                },
             )
             self.assertEqual(
                 account_activity["CNY-CASH"]["movement_destination"],
-                {"record_count": 1, "last_transaction_date": "2026-09-08"},
+                {
+                    "record_count": 1,
+                    "recent_record_count": 1,
+                    "last_transaction_date": "2026-09-08",
+                },
             )
 
             categories = {
@@ -284,7 +300,11 @@ class FinanceAppSmokeTest(unittest.TestCase):
             }
             self.assertEqual(
                 frozen_accounts["CNY-CASH"]["expense_source"],
-                {"record_count": 0, "last_transaction_date": None},
+                {
+                    "record_count": 0,
+                    "recent_record_count": 0,
+                    "last_transaction_date": None,
+                },
             )
             self.assertEqual(
                 frozen_categories["餐饮"],
@@ -302,7 +322,11 @@ class FinanceAppSmokeTest(unittest.TestCase):
             }
         self.assertEqual(
             next_day_accounts["CNY-CASH"]["expense_source"],
-            {"record_count": 1, "last_transaction_date": "2026-09-08"},
+            {
+                "record_count": 1,
+                "recent_record_count": 1,
+                "last_transaction_date": "2026-09-08",
+            },
         )
         self.assertEqual(
             next_day_categories["餐饮"],
@@ -313,6 +337,53 @@ class FinanceAppSmokeTest(unittest.TestCase):
                 "SELECT COUNT(*) AS count FROM daily_frequent_snapshots"
             ).fetchone()["count"]
         self.assertEqual(snapshot_count, 2)
+
+    def test_account_activity_prioritizes_last_14_days(self):
+        with database.connect() as connection:
+            accounts = {
+                row["code"]: row["id"]
+                for row in connection.execute("SELECT id, code FROM accounts")
+            }
+
+        with patch("app.main.today_in_shanghai", return_value=date(2026, 9, 19)):
+            for amount in ("10", "11", "12"):
+                create_expense(
+                    ExpenseCreate(
+                        transaction_date="2026-08-20",
+                        source_account_id=accounts["CNY-BANK-01"],
+                        amount=amount,
+                        category_id=self.food_category_id,
+                    )
+                )
+            create_expense(
+                ExpenseCreate(
+                    transaction_date="2026-09-18",
+                    source_account_id=accounts["HKD-BANK-01"],
+                    amount="20",
+                    category_id=self.food_category_id,
+                )
+            )
+            activity_by_code = {
+                account["code"]: account["activity"]["expense_source"]
+                for account in list_accounts()
+            }
+
+        self.assertEqual(
+            activity_by_code["CNY-BANK-01"],
+            {
+                "record_count": 3,
+                "recent_record_count": 0,
+                "last_transaction_date": "2026-08-20",
+            },
+        )
+        self.assertEqual(
+            activity_by_code["HKD-BANK-01"],
+            {
+                "record_count": 1,
+                "recent_record_count": 1,
+                "last_transaction_date": "2026-09-18",
+            },
+        )
 
     def test_payroll_expense_category_creates_expense(self):
         accounts = {account["code"]: account for account in list_accounts()}

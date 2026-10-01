@@ -75,6 +75,7 @@ Excel 不再承担编辑职责，只用于查看、分享和归档。数据库�
 - `outflow_minor`：付出金额，按来源账户币种的最小单位保存
 - `inflow_minor`：收到金额，按去向账户币种的最小单位保存
 - `category_id`：收入或支出分类；账户间移动通常为空
+- `budget_system_id`：可空的预算归属，供收入、支出筛选；不改变账户余额或预算计划
 - `counterparty`：交易对象或商户，可为空
 - `note`：备注
 - `created_at`、`updated_at`
@@ -187,6 +188,26 @@ Excel 导出至少包含：月度总览、账户余额、交易流水、月度�
 “账户与流水”页已提供修改、删除、余额调整、期初余额修正、异常标记和最近对账状态；详细规则与数据模型见 [data-correction-design.md](data-correction-design.md)。
 
 核心边界为：录错的真实业务优先修改或删除原流水；无法还原历史明细的账实差额才通过 `adjustment` 流水修正；期初余额录错则单独修正账户期初值。所有前端纠错写操作均需先创建数据库备份并写入审计日志。
+
+## 冲销事项与个人收支
+
+第五页“冲销与代收代付”将多笔实际收入、支出关联成可编辑事项，提供“原始收付 / 冲销后收支”两种统计口径。事项不设置结清状态，不预测未来金额；支持跨月、跨币种和负净额。账户余额、逐笔余额与原始资金流仍完全由实际流水决定。
+
+详细数据模型、日期和汇率口径、统计筛选、页面、API、导出及验收标准见 [transaction-offset-design.md](transaction-offset-design.md)。
+
+`transaction_offset_groups` 保存事项归属缓存与版本，`transaction_offset_members` 保存唯一流水关联。日期取全部成员最早日期，分类继承最早主流水；读取以实际成员为准，关联及原流水写入同步缓存。`app/offsets.py` 负责事项接口、事务校验与审计，`app/personal_cashflow.py` 生成个人收支结果，`app/reporting.py` 共享换算及每日统计，`app/offset_export.py` 将相同结果写入 Excel。
+
+## 第六页：预算计划与设置
+
+第六页 `/budgets` 已实现，详细设计见 [budget-and-fund-allocation-design.md](budget-and-fund-allocation-design.md)。预算系统直接作为用途，按系统、月份、币种先录总预算，再填写二级存储分配。总预算独立于分配合计，允许保留待分配金额，禁止新模式超额分配。总表按“预算系统 × 存储方式”展示，各币种分别统计。计划金额不由实际收支或估值自动改变，保留现有 `monthly_budgets`。
+
+实际流水新增可空的预算归属，第三页可按日常、专项等预算筛选。默认预算、分类映射、命名工资预设和栏目管理放入独立 `/settings`；首页支出、入账、转账采用独立表单与草稿。详细规则见 [budget-attribution-and-settings-design.md](budget-attribution-and-settings-design.md)。预算筛选影响查询明细、汇总和图表，不改变原始余额和收支算法。
+
+`app/budget_schema.sql` 定义预算系统、用途、存储方式、月计划、明细、版本、映射及预设表。`app/budgets.py` 提供独立路由与事务校验，设置和计划写入复用全库备份与 `budget` 审计；`static/budgets.*` 和 `static/settings.*` 提供管理界面。每系统、月份和币种仅一份当前计划，历史快照不参与累计。首次迁移先创建 `finance-pre-budget-*.db`，旧流水新增字段保持 NULL。
+
+总额与分配模型复用已有表，不需要迁移。`budget_plans.total_minor` 保存父级总额，`budget_plan_items` 保存二级存储分配；旧 `purpose_id` 保留，新分配默认使用所属系统的占位标签，编辑旧明细时保留原标签。页面保存发送 `allocation_mode=true` 校验总额及分配上限，原接口兼容旧请求。新增 `/api/budget/overview` 与 `/api/budget/overview.xlsx` 按系统、币种、区间返回各份总额、分配和待分配，并分别累计。旧总额为空时只在查询时以明细合计代替；不回填、不静默修正旧超额计划。
+
+日常消费采用有效归属：支出未单独标注时，统一按 `app_settings.daily_expense_budget_system_id` 统计，不回填历史流水。原始查询 SQL 与冲销主方向归属采用同一规则，返回原始 ID 和有效 ID，收入及资金移动不自动归入日常。该设置独立于首页预填，改名或变更预填不改变历史统计；升级前备份 `finance-pre-daily-budget-*.db`。`static/workspace.css` 提供统一视觉层，沿用原有字段、下拉组件和业务操作。
 
 ## 直接编辑数据库的约定
 

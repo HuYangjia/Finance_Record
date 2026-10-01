@@ -368,3 +368,7 @@ GET /api/transactions/search
 4. 在 `CATEGORY_SEED` 增加“工资/劳务支出”。
 5. 更新使用说明与前端记账模式文档。
 6. 执行冒烟测试、JavaScript 语法检查和实际接口验证。
+
+## 冲销事项扩展（2026-09-29）
+
+原始流水口径继续遵循本文。新增的“冲销后收支”基于完整事项计算净额，再按事项日期、方向和分类筛选，关联成员不重复计入；跨账户筛选使用“涉及账户”语义。负数、跨月、汇率缺失和关联流水编辑 / 删除规则见 [transaction-offset-design.md](transaction-offset-design.md)。

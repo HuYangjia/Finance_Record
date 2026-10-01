@@ -1,3 +1,11 @@
+const basisSelect = document.querySelector('#cashflow-basis');
+try { if (basisSelect) basisSelect.value = localStorage.getItem('finance-overview-basis') === 'offset' ? 'offset' : 'raw'; } catch (_) {}
+const selectedBasis = () => basisSelect?.value || 'raw';
+let dashboardRequest = 0;
+basisSelect?.addEventListener('change', () => {
+  try { localStorage.setItem('finance-overview-basis', basisSelect.value); } catch (_) {}
+  loadDashboard().catch(error => setStatus(error.message, 'error'));
+});
 const monthInput = document.querySelector("#month");
 const monthLabel = document.querySelector("#month-label");
 const statusElement = document.querySelector("#overview-status");
@@ -153,7 +161,13 @@ function renderBaseCurrencyTotals(records) {
 }
 
 async function loadDashboard() {
-  const data = await request(`/api/dashboard?month=${encodeURIComponent(monthInput.value)}`);
+  const serial = ++dashboardRequest;
+  const data = await request(`/api/dashboard?month=${encodeURIComponent(monthInput.value)}&basis=${selectedBasis()}`);
+  if (serial !== dashboardRequest) return;
+  document.querySelector("#cash-flow").hidden = data.basis === "offset";
+  const personalCashFlow = document.querySelector("#personal-cash-flow");
+  if (personalCashFlow) personalCashFlow.hidden = data.basis !== "offset";
+  if (data.basis === "offset" && personalCashFlow) window.OffsetUI.summary(personalCashFlow, data.personal_cash_flow);
   monthLabel.textContent = data.month;
   document.querySelector("#movement-month-label").textContent = data.month;
   document.querySelector("#base-currency-date").textContent = `截至 ${data.as_of_date}`;
@@ -205,6 +219,12 @@ async function loadTransactions() {
       cell.textContent = value;
       row.append(cell);
     }
+    if (record.offset_group_id) {
+      const link = document.createElement('a');
+      link.href = `/offsets?group=${record.offset_group_id}`;
+      link.textContent = record.offset_group_title;
+      row.lastElementChild.append(document.createTextNode(' · '), link);
+    }
     body.append(row);
   }
 }
@@ -215,7 +235,7 @@ monthInput.addEventListener("change", () => {
 });
 
 document.querySelector("#export-button").addEventListener("click", () => {
-  window.location.assign(`/api/export.xlsx?month=${encodeURIComponent(monthInput.value)}`);
+  window.location.assign(`/api/export.xlsx?month=${encodeURIComponent(monthInput.value)}&basis=${selectedBasis()}`);
 });
 
 async function initialize() {

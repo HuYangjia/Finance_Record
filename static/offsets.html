@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>个人财务账本 - 冲销与代收代付</title>
+  <link rel="icon" href="/static/compass-rose.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css?v=20261001-2">
+  <link rel="stylesheet" href="/static/workspace.css?v=20261001-2">
+  </head>
+<body>
+  <header class="topbar"><div class="topbar-inner">
+    <div class="brand"><h1>个人财务账本</h1><p>本地数据库记账</p></div>
+    <nav class="primary-nav" aria-label="主导航">
+      <a class="nav-link" href="/">记账</a><a class="nav-link" href="/overview">概况与查看</a>
+      <a class="nav-link" href="/accounts">账户与流水</a><a class="nav-link" href="/investments">投资与汇率</a>
+      <a class="nav-link is-active" href="/offsets" aria-current="page">冲销与代收代付</a>
+          <a class="nav-link" href="/budgets">预算计划</a>
+          <a class="nav-link" href="/settings">设置</a>
+    </nav>
+  </div></header>
+  <main class="overview-main offset-main">
+    <section class="transactions-panel">
+      <div class="section-heading"><h2>冲销事项</h2><button id="new-group" type="button">新建事项</button></div>
+      <p class="analysis-summary">把已记录的收付款组成一件事，按净额查看个人收支。可随时追加、移除关联，账户余额仍按实际流水计算。</p>
+      <form id="group-filter"><div class="form-grid">
+        <label>统计开始日期<input name="start_date" type="date"></label>
+        <label>统计结束日期<input name="end_date" type="date"></label>
+        <label>方向<select name="kind"><option value="">全部</option value="expense">支出冲销</option><option value="income">收入冲销</option></select></label>
+        <label>分类<select name="category_id" id="group-category-filter"></select></label>
+        <label>涉及账户<select name="involved_account_id" id="group-account-filter"></select></label>
+        <label>事项 / 对象 / 备注<input name="keyword" type="search" maxlength="120"></label>
+      </div><div class="form-actions"><button type="submit">查询</button><button type="reset" class="secondary-button">清除筛选</button></div></form>
+      <div id="group-status" role="status"></div><div id="group-summary"></div><div id="group-list"></div>
+      <div class="pager"><button id="groups-prev" type="button" class="secondary-button">上一页</button><span id="groups-page"></span><button id="groups-next" type="button" class="secondary-button">下一页</button></div>
+    </section>
+    <section id="group-editor" class="transactions-panel" hidden>
+      <div class="section-heading"><h2 id="editor-title">新建事项</h2><a href="/">去记一笔实际收付款</a></div>
+      <form id="offset-form">
+        <div class="form-grid">
+          <label>事项名称<input id="offset-title" required maxlength="120"></label>
+          <label>方向<select id="offset-kind"><option value="expense">支出后收回</option><option value="income">收入后分出</option></select></label>
+          <label>备注<input id="offset-note" maxlength="500"></label>
+        </div>
+        <p class="analysis-summary">日期自动取全部成员最早日期，分类继承最早一笔主流水；成员变化时自动更新。</p>
+        <p id="offset-attribution" class="analysis-summary" aria-live="polite"></p>
+        <section class="offset-side"><div class="section-heading"><h3 id="primary-label">主流水：支出</h3><button type="button" data-pick="primary" class="secondary-button">选择已有流水</button></div><div id="primary-members"></div></section>
+        <section class="offset-side"><div class="section-heading"><h3 id="opposite-label">冲抵流水：收入</h3><button type="button" data-pick="opposite" class="secondary-button">选择已有流水</button></div><div id="opposite-members"></div></section>
+        <div id="preview-content" aria-live="polite"></div><div id="editor-status" role="status"></div>
+        <div class="form-actions"><button id="preview-group" type="button" class="secondary-button">预览净额</button><button id="save-group" type="submit">保存事项</button><button id="cancel-group" type="button" class="secondary-button">取消编辑</button><button id="dissolve-group" type="button" class="secondary-button danger-action" hidden>解散事项</button></div>
+      </form>
+    </section>
+  </main>
+  <dialog id="candidate-dialog" class="app-dialog offset-dialog" aria-labelledby="candidate-title">
+    <div class="dialog-heading"><h2 id="candidate-title">选择原始流水</h2><button id="close-candidates" type="button" class="dialog-close" aria-label="关闭">×</button></div>
+    <form id="candidate-filter"><div class="form-grid">
+      <label>开始日期<input name="start_date" type="date"></label><label>结束日期<input name="end_date" type="date"></label>
+      <label>账户<select name="account_id" id="candidate-account"></select></label>
+      <label>分类<select name="category_id" id="candidate-category"></select></label>
+      <label>对象 / 备注<input name="keyword" type="search" maxlength="120"></label>
+    </div><button type="submit">查询流水</button></form>
+    <p id="candidate-status" role="status"></p><div id="candidate-list"></div>
+    <div class="pager"><button id="candidates-prev" type="button" class="secondary-button">上一页</button><span id="candidates-page"></span><button id="candidates-next" type="button" class="secondary-button">下一页</button></div>
+    <button id="add-candidates" type="button">加入所选</button>
+  </dialog>
+  <script src="/static/offset-ui.js?v=20261001-2"></script>
+  <script src="/static/offsets.js?v=20261001-2"></script>
+</body></html>

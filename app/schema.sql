@@ -43,6 +43,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS categories_child_unique
 
 CREATE TABLE IF NOT EXISTS transactions (
     id INTEGER PRIMARY KEY,
+    budget_system_id INTEGER REFERENCES budget_systems(id) ON DELETE RESTRICT,
     transaction_date TEXT NOT NULL,
     transaction_type TEXT NOT NULL CHECK (
         transaction_type IN (
@@ -157,7 +158,9 @@ CREATE TABLE IF NOT EXISTS change_audit_logs (
             'transaction_flag',
             'reconciliation',
             'investment_valuation',
-            'exchange_rate'
+            'exchange_rate',
+            'offset_group',
+            'budget'
         )
     ),
     entity_id INTEGER,
@@ -248,6 +251,7 @@ CREATE INDEX IF NOT EXISTS daily_cny_exchange_rates_date_index
 
 CREATE TABLE IF NOT EXISTS daily_frequent_snapshots (
     snapshot_date TEXT PRIMARY KEY,
+    rules_version INTEGER NOT NULL DEFAULT 2,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -265,6 +269,7 @@ CREATE TABLE IF NOT EXISTS daily_account_frequent_activity (
         )
     ),
     record_count INTEGER NOT NULL CHECK (record_count > 0),
+    recent_record_count INTEGER NOT NULL DEFAULT 0 CHECK (recent_record_count >= 0),
     last_transaction_date TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (snapshot_date, account_id, activity_key)
@@ -443,3 +448,24 @@ SELECT
     END AS balance_minor
 FROM accounts
 LEFT JOIN movement_totals ON movement_totals.account_id = accounts.id;
+
+CREATE TABLE IF NOT EXISTS transaction_offset_groups (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 120),
+    kind TEXT NOT NULL CHECK (kind IN ('income', 'expense')),
+    anchor_transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE RESTRICT,
+    statistics_date TEXT NOT NULL,
+    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
+    note TEXT,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS offset_groups_date_index ON transaction_offset_groups(statistics_date, id);
+CREATE INDEX IF NOT EXISTS offset_groups_category_index ON transaction_offset_groups(kind, category_id, statistics_date);
+CREATE TABLE IF NOT EXISTS transaction_offset_members (
+    transaction_id INTEGER PRIMARY KEY REFERENCES transactions(id) ON DELETE RESTRICT,
+    group_id INTEGER NOT NULL REFERENCES transaction_offset_groups(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS offset_members_group_index ON transaction_offset_members(group_id);

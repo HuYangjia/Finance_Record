@@ -4,10 +4,46 @@
   function optionActivity(option, activityKey) {
     try {
       const activity = JSON.parse(option.dataset.activity || "{}");
-      return activity[activityKey] || { record_count: 0, last_transaction_date: null };
+      const keyedActivity = activity[activityKey];
+      if (keyedActivity && typeof keyedActivity === "object") {
+        return keyedActivity;
+      }
+      if (Number.isFinite(Number(activity.record_count))) {
+        return activity;
+      }
+      return { record_count: 0, last_transaction_date: null };
     } catch (_) {
       return { record_count: 0, last_transaction_date: null };
     }
+  }
+
+  function activityTier(activity) {
+    const recordCount = Number(activity.record_count) || 0;
+    if (Object.hasOwn(activity, "recent_record_count")) {
+      return Number(activity.recent_record_count) > 0
+        ? 2
+        : recordCount > 0
+          ? 1
+          : 0;
+    }
+    return recordCount > 0 ? 1 : 0;
+  }
+
+  function activityPriorityCount(activity) {
+    const recentRecordCount = Number(activity.recent_record_count);
+    return Number.isFinite(recentRecordCount) && recentRecordCount > 0
+      ? recentRecordCount
+      : Number(activity.record_count) || 0;
+  }
+
+  function compareActivity(left, right) {
+    return (
+      activityTier(right) - activityTier(left)
+      || activityPriorityCount(right) - activityPriorityCount(left)
+      || (right.last_transaction_date || "").localeCompare(
+        left.last_transaction_date || "",
+      )
+    );
   }
 
   function optionButton(option, selectOption) {
@@ -97,10 +133,7 @@
         }))
         .filter((item) => item.activity.record_count > 0)
         .sort((left, right) => (
-          right.activity.record_count - left.activity.record_count
-          || (right.activity.last_transaction_date || "").localeCompare(
-            left.activity.last_transaction_date || "",
-          )
+          compareActivity(left.activity, right.activity)
           || left.index - right.index
         ))
         .slice(0, configuration.commonLimit)
