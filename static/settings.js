@@ -27,6 +27,10 @@
       const row=node('div','','budget-setting-row');
       const title=r.path||r.name||`${r.mode==='expense'?'支出':'入账'} / ${categoryName(r.category_id)}`;
       row.append(node('strong',title),node('span',`${r.is_active?'启用':'已停用'}${key==='systems'&&r.id===config.daily_expense?' · 日常归属':''}${key==='rules'||key==='presets'?' · '+systemName(r.budget_system_id):''}`,r.is_active?'setting-state':'setting-state is-inactive'));
+      if(key==='systems'){
+        row.append(node('span',r.currency_conflict?'旧多币种待整理':r.currency_code||'首次编制时选币种','setting-state'));
+        if(r.is_active&&!r.currency_conflict)row.append(button('修改币种',()=>act(()=>BudgetCurrency.open(r.id,config,async next=>{config=next;$('setting-editor').hidden=true;render();status('预算币种已更正，所有月份的数字保持不变，可逐月修改金额。');})),'quiet-button'));
+      }
       if(!r.is_placeholder){row.append(button('编辑',()=>act(()=>open(key,r)),'quiet-button'),button('删除',()=>act(async()=>{if(!confirm(`删除“${title}”？有历史引用时请改用停用。`))return;config=await request(`/api/budget/config/${key}/${r.id}?expected_version=${config.version}`,undefined,'DELETE');render();status('已删除。');}),'quiet-button danger-button'));}
       else row.append(node('small','系统保留，用于尚未细分的计划'));
       target.append(row);
@@ -43,12 +47,14 @@
   async function open(key,row=null){
     editCollection=key;editing=row;$('setting-form').reset();
     const dimension=['storage','purposes'].includes(key);
-    const fields=new Set(key==='systems'?['name','order','note']:dimension?['name','system','parent','order','note']:key==='rules'?['system','mode','category']:['name','system','mode','category','account']);
+    const fields=new Set(key==='systems'?['name','currency','order','note']:dimension?['name','system','parent','order','note']:key==='rules'?['system','mode','category']:['name','system','mode','category','account']);
     document.querySelectorAll('[data-setting]').forEach(e=>{e.hidden=!fields.has(e.dataset.setting);for(const i of e.querySelectorAll('input,select'))i.disabled=e.hidden;});
     options($('setting-system'),config.systems.filter(s=>s.is_active||s.id===row?.budget_system_id),null,row?.budget_system_id||$('settings-system').value||config.systems[0]?.id);
     if(dimension&&row)$('setting-system').disabled=true;
     $('setting-name').required=fields.has('name');$('setting-category').required=key==='rules';
     $('setting-name').value=row?.name||'';$('setting-note').value=row?.note||'';$('setting-order').value=row?.sort_order||0;
+    options($('setting-currency'),config.currencies.filter(c=>c.is_active||c.code===row?.currency_code),'首次编制时选择',row?.currency_code);
+    $('setting-currency').disabled=key!=='systems'||Boolean(row?.plan_currencies?.length);
     $('setting-mode').value=row?.mode||'expense';$('setting-active').value=row?.is_active===0?'0':'1';
     refreshCategory(row?.category_id);if(dimension)refreshParent(row?.parent_id);
     options($('setting-account'),accounts,'不预填账户',row?.account_id);
@@ -65,6 +71,7 @@
     const key=editCollection, body={expected_version:config.version,is_active:$('setting-active').value==='1'};
     if(key!=='rules')body.name=$('setting-name').value;
     if(key!=='systems')body.budget_system_id=Number($('setting-system').value);
+    if(key==='systems'&&!$('setting-currency').disabled)body.currency_code=$('setting-currency').value||null;
     if(['systems','storage','purposes'].includes(key)){body.sort_order=Number($('setting-order').value);body.note=$('setting-note').value;}
     if(['storage','purposes'].includes(key))body.parent_id=Number($('setting-parent').value)||null;
     if(['rules','presets'].includes(key)){body.mode=$('setting-mode').value;body.category_id=Number($('setting-category').value)||null;}

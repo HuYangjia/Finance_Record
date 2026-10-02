@@ -51,6 +51,7 @@
     <div class="section-heading"><div><p class="eyebrow">编辑项目</p><h2 id="setting-title">新增设置</h2></div></div>
     <form id="setting-form"><div class="form-grid">
       <label data-setting="name">名称<input id="setting-name" maxlength="120" placeholder="例如：专项预算、教育助学"></label>
+      <label data-setting="currency">预算币种<select id="setting-currency"></select><small>所有月份沿用此币种。已有计划请使用列表中的“修改币种”。</small></label>
       <label data-setting="system">预算系统<select id="setting-system"></select></label>
       <label data-setting="parent">父栏目<select id="setting-parent"></select></label>
       <label data-setting="order">显示顺序<input id="setting-order" type="number" step="1" value="0"></label>
@@ -62,5 +63,5 @@
     </div><div class="form-actions"><button type="button" id="cancel-setting" class="secondary-button">取消</button><button type="submit">保存设置</button></div></form>
   </section>
 </main>
-<script src="/static/budget-ui.js?v=20261001-2"></script><script src="/static/settings.js?v=20261001-4"></script>
+<script src="/static/budget-ui.js?v=20261001-2"></script><script src="/static/budget-currency.js?v=20261002-2"></script><script src="/static/settings.js?v=20261002-2"></script>
 </body></html>

@@ -205,9 +205,11 @@ Excel 导出至少包含：月度总览、账户余额、交易流水、月度�
 
 `app/budget_schema.sql` 定义预算系统、用途、存储方式、月计划、明细、版本、映射及预设表。`app/budgets.py` 提供独立路由与事务校验，设置和计划写入复用全库备份与 `budget` 审计；`static/budgets.*` 和 `static/settings.*` 提供管理界面。每系统、月份和币种仅一份当前计划，历史快照不参与累计。首次迁移先创建 `finance-pre-budget-*.db`，旧流水新增字段保持 NULL。
 
-总额与分配模型复用已有表，不需要迁移。`budget_plans.total_minor` 保存父级总额，`budget_plan_items` 保存二级存储分配；旧 `purpose_id` 保留，新分配默认使用所属系统的占位标签，编辑旧明细时保留原标签。单币种接口通过 `allocation_mode=true` 校验总额及分配上限，兼容旧请求；当前页面使用下述月度批量接口，强制执行同一校验。新增 `/api/budget/overview` 与 `/api/budget/overview.xlsx` 按系统、币种、区间返回各份总额、分配和待分配，并分别累计。旧总额为空时只在查询时以明细合计代替；不回填、不静默修正旧超额计划。
+总额与分配模型复用已有表。`budget_plans.total_minor` 保存父级总额，`budget_plan_items` 保存二级存储分配；旧 `purpose_id` 保留，新分配默认使用所属系统的占位标签，编辑旧明细时保留原标签。单币种接口通过 `allocation_mode=true` 校验总额及分配上限，兼容旧请求；当前页面使用下述月度接口，强制执行同一校验。新增 `/api/budget/overview` 与 `/api/budget/overview.xlsx` 按系统、币种、区间返回各份总额、分配和待分配，并分别累计。旧总额为空时只在查询时以明细合计代替；不回填、不静默修正旧超额计划。
 
-2026-10-02：电脑端按“预算系统 × 月份”编辑一份含多币种金额组的预案。`GET/PUT /api/budget/monthly/{system_id}/{month}` 读写全部币种，批量接口强制按总额校验，复用 `save_plan_in_connection` 及旧单币种接口。一次 `mutation` 事务写入各币种及版本，任一失败整体回滚；提交不得重复或漏掉已有币种，各组核对版本。列表合并用途行，编辑不受查看币种筛选限制，累计与导出继续按币种独立计算，数据库结构不变。
+2026-10-02 修正：`budget_systems.currency_code` 保存该预算系统唯一币种，可先留空，首次编制时确定。电脑端每月只编辑一个总额。`GET/PUT /api/budget/monthly/{system_id}/{month}` 保留列表包装以兼容读取，但提交只允许一份单币种计划，旧单币种写入接口同样校验系统币种。不同系统可选不同币种，累计与导出继续分币种统计。
+
+`GET/PUT /api/budget/systems/{system_id}/currency` 提供全部月份预览与币种更正；使用设置版本和完整月计划 ID / 版本列表防止并发覆盖。更正保持可见数字，按目标精度重新编码最小单位，校验不通过则整体回滚。每月保留计划和明细 ID、追加版本快照，旧快照继续使用原币种。`static/budget-currency.js` 供预算页及设置页共用。迁移前创建 `finance-pre-budget-currency-*.db`，仅推导旧系统的唯一币种，不改历史计划；旧多币种系统保留只读，阻止继续混入金额。真实流水及其币种不受预算币种限制或变更影响。
 
 日常消费采用有效归属：支出未单独标注时，统一按 `app_settings.daily_expense_budget_system_id` 统计，不回填历史流水。原始查询 SQL 与冲销主方向归属采用同一规则，返回原始 ID 和有效 ID，收入及资金移动不自动归入日常。该设置独立于首页预填，改名或变更预填不改变历史统计；升级前备份 `finance-pre-daily-budget-*.db`。`static/workspace.css` 提供统一视觉层，沿用原有字段、下拉组件和业务操作。
 

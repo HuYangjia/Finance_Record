@@ -2,7 +2,8 @@ CREATE TABLE IF NOT EXISTS budget_systems (
     id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE,
     sort_order INTEGER NOT NULL DEFAULT 0,
     is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
-    note TEXT NOT NULL DEFAULT ''
+    note TEXT NOT NULL DEFAULT '',
+    currency_code TEXT REFERENCES currencies(code)
 );
 CREATE TABLE IF NOT EXISTS budget_storage_methods (
     id INTEGER PRIMARY KEY, budget_system_id INTEGER NOT NULL REFERENCES budget_systems(id) ON DELETE RESTRICT,

@@ -46,6 +46,7 @@ class BudgetTest(unittest.TestCase):
         return response.json()
 
     def setting(self, collection, item_id=None, **values):
+        self.config = self.call('GET', '/api/budget/config')
         values['expected_version'] = self.config['version']
         self.config = self.call('PUT' if item_id else 'POST',f'/api/budget/config/{collection}'+(f'/{item_id}' if item_id else ''),values,200 if item_id else 201)
         return next((r for r in self.config[collection] if r['id']==item_id),None) if item_id else max(self.config[collection],key=lambda r:r['id'])
@@ -73,7 +74,8 @@ class BudgetTest(unittest.TestCase):
         self.plan()
         nov=self.plan('2026-11',[self.item('300')])
         self.plan('2026-12',[self.item('200')])
-        self.plan(currency='HKD',items=[self.item('777')])
+        other=self.setting('systems',name='港币预算',currency_code='HKD')['id']
+        self.plan(system=other,currency='HKD',total='777',items=[])
         self.assertEqual(self.summary()['cumulative'],'800.00')
         edited=[dict(id=nov['items'][0]['id'],**self.item('350'))]
         nov=self.plan('2026-11',edited,version=1)
@@ -128,7 +130,8 @@ class BudgetTest(unittest.TestCase):
         self.plan(month='2026-09',total='1000',allocation_mode=True,items=[dict(storage_method_id=self.storage,amount='600')])
         self.plan(total='200',allocation_mode=True,items=[])
         self.plan(system=other,total='500',allocation_mode=True,items=[dict(storage_method_id=storage,amount='300')])
-        self.plan(currency='HKD',total='800',allocation_mode=True,items=[])
+        hkd=self.setting('systems',name='港币预算',currency_code='HKD')['id']
+        self.plan(system=hkd,currency='HKD',total='800',allocation_mode=True,items=[])
         old=self.plan(month='2026-08',items=[self.item('50')])
         self.plan(month='2026-08',version=1,total='100',allocation_mode=True,items=[dict(id=old['items'][0]['id'],storage_method_id=self.storage,amount='60')])
         old=self.call('GET',f'/api/budget/plans/{self.daily}/2026-08/CNY')
@@ -154,7 +157,8 @@ class BudgetTest(unittest.TestCase):
     def test_total_budget_export_preserves_totals_unallocated_and_currency(self):
         self.setting('systems',self.daily,name='=用途')
         self.plan(total='1000',allocation_mode=True,items=[dict(storage_method_id=self.storage,amount='600',title='=1+1')])
-        self.plan(currency='HKD',total='200',items=[],allocation_mode=True)
+        hkd=self.setting('systems',name='港币预算',currency_code='HKD')['id']
+        self.plan(system=hkd,currency='HKD',total='200',items=[],allocation_mode=True)
         response=self.client.get('/api/budget/overview.xlsx?end_month=2026-10')
         self.assertEqual(response.status_code,200)
         book=load_workbook(BytesIO(response.content))
@@ -165,51 +169,124 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(book['二级存储分配']['F2'].data_type,'s')
         self.assertEqual(book['分币种汇总']['C4'].value,200)
 
-    def test_monthly_multicurrency_save_legacy_ids_and_currency_totals(self):
+    def test_monthly_single_currency_save_legacy_ids_and_system_currency(self):
         legacy=self.plan(month='2026-09',items=[self.item('600')])
         url=f'/api/budget/monthly/{self.daily}/2026-09'
         old=self.call('GET',url)
         self.assertEqual(old['plans'][0]['items'][0]['id'],legacy['items'][0]['id'])
         before=self.call('GET','/api/accounts')
-        plans=[dict(currency_code='CNY',expected_version=1,total='1000',items=legacy['items']),
-               dict(currency_code='HKD',expected_version=0,total='2000',items=[dict(storage_method_id=self.storage,amount='1200')])]
+        plans=[dict(currency_code='CNY',expected_version=1,total='1000',items=legacy['items'])]
         result=self.call('PUT',url,dict(plans=plans))
-        self.assertEqual([p['currency_code'] for p in result['plans']],['CNY','HKD'])
-        self.assertEqual([p['version'] for p in result['plans']],[2,1])
+        self.assertEqual([p['currency_code'] for p in result['plans']],['CNY'])
+        self.assertEqual([p['version'] for p in result['plans']],[2])
+        self.assertEqual(result['currency_code'],'CNY')
         self.assertEqual(result['plans'][0]['items'][0]['purpose_id'],self.purpose)
         self.assertEqual(self.call('GET',url),result)
         overview=self.call('GET','/api/budget/overview?end_month=2026-09')
-        self.assertEqual([b['monthly']['unallocated'] for b in overview['currencies']],['400.00','800.00'])
+        self.assertEqual([b['monthly']['unallocated'] for b in overview['currencies']],['400.00'])
         self.assertEqual(self.call('GET','/api/accounts'),before)
         self.assertEqual(self.call('GET','/api/transactions/search')['pagination']['total'],0)
 
-    def test_monthly_failed_currency_rolls_back_entire_plan_and_revisions(self):
+    def test_monthly_rejects_multiple_and_other_currencies_and_preserves_plan(self):
         url=f'/api/budget/monthly/{self.daily}/2026-09'
         first=dict(currency_code='CNY',expected_version=0,total='1000',items=[])
         bad=dict(currency_code='JPY',expected_version=0,total='200.1',items=[])
         self.call('PUT',url,dict(plans=[first,bad]),422)
         self.assertEqual(self.call('GET',url)['plans'],[])
-        good=dict(currency_code='HKD',expected_version=0,total='500',items=[])
-        self.call('PUT',url,dict(plans=[first,good]))
-        before=self.call('GET',url)
-        for failing in [dict(good,expected_version=0),dict(good,expected_version=1,total='1',allocation_mode=False,items=[dict(storage_method_id=self.storage,amount='2')])]:
-            self.call('PUT',url,dict(plans=[dict(first,expected_version=1,total='9999'),failing]),409 if failing['expected_version']==0 else 422)
-            self.assertEqual(self.call('GET',url),before)
-        with database.connect() as c:
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM budget_plan_revisions').fetchone()[0],2)
-
-    def test_monthly_duplicate_omitted_and_concurrently_added_currencies(self):
-        url=f'/api/budget/monthly/{self.daily}/2026-09'
-        first=dict(currency_code='CNY',expected_version=0,total='1000',items=[])
-        self.call('PUT',url,dict(plans=[first,first]),422)
-        self.call('PUT',url,dict(plans=[]),422)
         self.call('PUT',url,dict(plans=[first]))
-        snapshot=dict(first,expected_version=1,total='1200')
-        self.plan(month='2026-09',currency='HKD',items=[],total='300',allocation_mode=True)
-        self.call('PUT',url,dict(plans=[snapshot]),409)
-        self.assertEqual(self.call('GET',url)['plans'][0]['total'],'1000.00')
-        self.call('PUT',url,dict(plans=[snapshot,dict(currency_code='HKD',expected_version=1,total='300',items=[])]))
+        before=self.call('GET',url)
+        for failing,code in [(dict(first,currency_code='HKD'),409),(dict(first,expected_version=0),409),(dict(first,expected_version=1,total='1',allocation_mode=False,items=[dict(storage_method_id=self.storage,amount='2')]),422)]:
+            self.call('PUT',url,dict(plans=[failing]),code)
+            self.assertEqual(self.call('GET',url),before)
+        self.call('PUT',f'/api/budget/plans/{self.daily}/2026-11/HKD',dict(expected_version=0,items=[]),409)
+        self.call('PUT',url,dict(plans=[]),422)
+        with database.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM budget_plan_revisions').fetchone()[0],1)
+
+    def currency_change_body(self, code='HKD'):
+        preview=self.call('GET',f'/api/budget/systems/{self.daily}/currency')
+        return dict(expected_version=preview['expected_version'],currency_code=code,
+                    plans=[dict(id=p['id'],version=p['version']) for p in preview['plans']])
+
+    def test_config_currency_can_be_selected_and_reset_before_first_plan(self):
+        selected=self.setting('systems',self.daily,name='日常预算',currency_code='HKD')
+        self.assertEqual(selected['currency_code'],'HKD')
+        reset=self.setting('systems',self.daily,name='日常预算',currency_code=None)
+        self.assertIsNone(reset['currency_code'])
+        self.plan(total='1000',items=[])
+        version=self.call('GET','/api/budget/config')['version']
+        self.call('PUT',f'/api/budget/config/systems/{self.daily}',dict(expected_version=version,name='日常预算',currency_code=None),409)
+
+    def test_currency_correction_all_months_numbers_ids_history_and_actuals(self):
+        actual=self.transaction(budget=self.daily)  # HKD actuals can reference a CNY budget.
+        before_accounts=self.call('GET','/api/accounts')
+        sep=self.plan(month='2026-09',total='1000',items=[self.item('600')])
+        oct=self.plan(items=[self.item('400')])  # Retain the legacy inferred total.
+        other=self.setting('systems',name='保持不变')['id']
+        other_plan=self.plan(system=other,items=[],total='90')
+        url=f'/api/budget/systems/{self.daily}/currency'
+        self.config=self.call('PUT',url,self.currency_change_body())
+        for old in (sep,oct):
+            p=self.call('GET',f"/api/budget/plans/{self.daily}/{old['month']}/HKD")
+            self.assertEqual(p['id'],old['id']);self.assertEqual(p['version'],2)
+            self.assertEqual(p['total'],old['total']);self.assertEqual(p['items'],old['items'])
+            revisions=self.call('GET',f"/api/budget/plans/{self.daily}/{old['month']}/HKD/revisions")
+            self.assertEqual([r['plan']['currency_code'] for r in revisions],['HKD','CNY'])
+        # Changing decimal precision re-encodes minor units while preserving the number.
+        self.call('PUT',url,self.currency_change_body('JPY'))
+        jpy=self.call('GET',f'/api/budget/plans/{self.daily}/2026-09/JPY')
+        self.assertEqual(jpy['total'],'1000');self.assertEqual(jpy['total_minor'],1000)
+        self.assertEqual(jpy['items'][0]['amount_minor'],600)
+        self.call('PUT',url,self.currency_change_body('CNY'))
+        self.assertEqual(self.call('GET',f'/api/budget/plans/{self.daily}/2026-09/CNY')['total'],'1000.00')
+        self.assertEqual(self.call('GET',f'/api/budget/plans/{other}/2026-10/CNY'),other_plan)
+        self.assertEqual(self.call('GET',f"/api/transactions/{actual['id']}"),actual)
+        self.assertEqual(self.call('GET','/api/accounts'),before_accounts)
+        self.call('PUT',f'/api/budget/plans/{self.daily}/2026-09/HKD',dict(expected_version=2,total='1000',items=[]),409)
+
+    def test_currency_correction_precision_and_concurrency_roll_back(self):
+        sep=self.plan(month='2026-09',total='1000',items=[self.item('200')])
+        self.plan(total='1000',items=[self.item('0.01')])
+        url=f'/api/budget/systems/{self.daily}/currency'
+        before=self.call('GET',url)
+        self.call('PUT',url,self.currency_change_body('JPY'),422)
+        self.assertEqual(self.call('GET',url),before)
+        body=self.currency_change_body()
+        self.call('PUT',url,dict(body,plans=body['plans'][:1]),409)
+        self.call('PUT',url,dict(body,plans=body['plans']+body['plans'][:1]),409)
+        self.plan(month='2026-09',version=1,total='1100',items=sep['items'])
+        self.call('PUT',url,body,409)
+        body=self.currency_change_body()
+        self.plan(month='2026-11',total='800',items=[])
+        self.call('PUT',url,body,409)
+        self.assertEqual(self.call('GET',f'/api/budget/monthly/{self.daily}/2026-09')['currency_code'],'CNY')
+        self.call('PUT',f'/api/budget/config/systems/{self.daily}',dict(expected_version=body['expected_version'],name='日常预算',currency_code='HKD'),409)
         self.call('GET',f'/api/budget/monthly/{self.daily}/2026-13',code=422)
+
+    def test_currency_migration_backs_up_and_preserves_legacy_multicurrency(self):
+        self.plan(month='2026-09',total='500')
+        other=self.setting('systems',name='旧多币种')['id']
+        with database.connect() as c:
+            c.executemany('INSERT INTO budget_plans(budget_system_id,month,currency_code,total_minor) VALUES (?,?,?,?)',
+                          [(other,'2026-09','CNY',10000),(other,'2026-09','HKD',20000)])
+            c.execute('ALTER TABLE budget_systems DROP COLUMN currency_code')
+        database.initialize_database()
+        backups=list(database.BACKUP_DIR.glob('finance-pre-budget-currency-*.db'))
+        self.assertEqual(len(backups),1)
+        with sqlite3.connect(backups[0]) as c:
+            self.assertNotIn('currency_code',[r[1] for r in c.execute('PRAGMA table_info(budget_systems)')])
+        config=self.call('GET','/api/budget/config')
+        daily=next(s for s in config['systems'] if s['id']==self.daily)
+        legacy=next(s for s in config['systems'] if s['id']==other)
+        self.assertEqual(daily['currency_code'],'CNY');self.assertIsNone(legacy['currency_code'])
+        self.assertTrue(legacy['currency_conflict'])
+        overview=self.call('GET',f'/api/budget/overview?end_month=2026-09&system_id={other}')
+        self.assertEqual([p['budget_total'] for p in overview['plans']],['100.00','200.00'])
+        self.call('PUT',f'/api/budget/plans/{other}/2026-10/CNY',dict(expected_version=0,total='1',items=[]),409)
+        preview=self.call('GET',f'/api/budget/systems/{other}/currency')
+        self.call('PUT',f'/api/budget/systems/{other}/currency',dict(expected_version=preview['expected_version'],currency_code='CNY',plans=[dict(id=p['id'],version=p['version']) for p in preview['plans']]),409)
+        database.initialize_database()
+        self.assertEqual(len(list(database.BACKUP_DIR.glob('finance-pre-budget-currency-*.db'))),1)
 
     def test_version_conflict_rolls_back_and_deletion_retains_history(self):
         plan=self.plan()
@@ -226,7 +303,8 @@ class BudgetTest(unittest.TestCase):
     def test_plan_precision_limits_ids_and_cross_system_references(self):
         url=f'/api/budget/plans/{self.daily}/2026-10/JPY'
         self.call('PUT',url,dict(expected_version=0,items=[self.item('1.1')]),422)
-        self.plan(currency='JPY',items=[self.item('123')])
+        jpy=self.setting('systems',name='日元预算',currency_code='JPY')['id']
+        self.plan(system=jpy,currency='JPY',total='123',items=[])
         for amount in ['-1','1.001','100000000000000']:
             self.call('PUT',f'/api/budget/plans/{self.daily}/2026-10/CNY',dict(expected_version=0,items=[self.item(amount)]),422)
         other=self.setting('systems',name='专项预算')['id']

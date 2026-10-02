@@ -82,6 +82,10 @@ def paths(rows):
 def config_data(c):
     data = {key: [dict(r) for r in c.execute(f'SELECT * FROM {table} ORDER BY '+('sort_order,id' if key in ('systems','storage','purposes') else 'id'))]
             for key, table in COLLECTIONS.items()}
+    for system in data['systems']:
+        codes = [r[0] for r in c.execute('SELECT DISTINCT currency_code FROM budget_plans WHERE budget_system_id=? ORDER BY currency_code', (system['id'],))]
+        system['plan_currencies'] = codes
+        system['currency_conflict'] = len(codes)>1 or bool(codes and system['currency_code'] and codes != [system['currency_code']])
     for key in ('storage', 'purposes'):
         paths(data[key])
     settings = {r['key']: r['value'] for r in c.execute('SELECT * FROM app_settings')}
@@ -123,6 +127,7 @@ class ConfigWrite(BaseModel):
     mode: Literal['income', 'expense'] = 'expense'
     category_id: int | None = Field(default=None, gt=0)
     account_id: int | None = Field(default=None, gt=0)
+    currency_code: str | None = Field(default=None, min_length=1, max_length=12)
 
 
 class DefaultsWrite(BaseModel):
@@ -226,6 +231,12 @@ def save_config_item(collection, item_id, body):
             raise HTTPException(422, '请填写名称。')
         if collection == 'systems':
             values = dict(name=body.name.strip(),sort_order=body.sort_order,is_active=int(body.is_active),note=body.note)
+            if 'currency_code' in body.model_fields_set:
+                if body.currency_code is not None:
+                    currency(c, body.currency_code)
+                if old and old['currency_code'] != body.currency_code and c.execute('SELECT 1 FROM budget_plans WHERE budget_system_id=?', (item_id,)).fetchone():
+                    raise HTTPException(409, '已有月度计划，请使用“修改预算币种”预览并统一更正。')
+                values['currency_code'] = body.currency_code
             if old and not body.is_active:
                 config = config_data(c)
                 if item_id == config['daily_expense'] or item_id in config['defaults'].values() or any(r['budget_system_id']==item_id and r['is_active'] for key in ('rules','presets') for r in config[key]):
@@ -384,7 +395,16 @@ def get_plan(system_id: int, month: str, code: str):
 
 def save_plan_in_connection(c, system_id: int, month: str, code: str, body: PlanWrite):
     before = plan_data(c,system_id,month,code)
-    require_system(c,system_id)
+    system = require_system(c,system_id)
+    codes = {r[0] for r in c.execute('SELECT DISTINCT currency_code FROM budget_plans WHERE budget_system_id=?', (system_id,))}
+    if len(codes)>1 or (codes and system['currency_code'] and codes != {system['currency_code']}):
+        raise HTTPException(409, '此预算存在旧版多币种计划，须先整理，原记录已完整保留。')
+    chosen = system['currency_code'] or next(iter(codes), None)
+    if chosen and chosen != code:
+        raise HTTPException(409, f'此预算统一使用 {chosen}，请重新加载；需要更正时使用“修改预算币种”。')
+    if not system['currency_code']:
+        c.execute('UPDATE budget_systems SET currency_code=? WHERE id=?', (code,system_id))
+        c.execute("UPDATE app_settings SET value=CAST(value AS INTEGER)+1 WHERE key='budget_config_version'")
     if before['version'] != body.expected_version:
         raise HTTPException(409, '本月计划已更新，请重新加载后再编辑。')
     existing = {i['id']:i for i in before['items']}; seen = set()
@@ -440,7 +460,7 @@ class CurrencyPlanWrite(PlanWrite):
 
 
 class MonthlyPlanWrite(BaseModel):
-    plans: list[CurrencyPlanWrite] = Field(min_length=1, max_length=100)
+    plans: list[CurrencyPlanWrite] = Field(min_length=1, max_length=1)
 
 
 def monthly_plan_data(c, system_id, month):
@@ -449,7 +469,7 @@ def monthly_plan_data(c, system_id, month):
     codes = [r[0] for r in c.execute(
         'SELECT currency_code FROM budget_plans WHERE budget_system_id=? AND month=? ORDER BY currency_code',
         (system_id,month))]
-    return dict(budget_system_id=system_id,system_name=system['name'],month=month,
+    return dict(budget_system_id=system_id,system_name=system['name'],month=month,currency_code=system['currency_code'],
                 plans=[plan_data(c,system_id,month,code) for code in codes])
 
 
@@ -463,15 +483,7 @@ def get_monthly_plan(system_id: int, month: str):
 @router.put('/api/budget/monthly/{system_id}/{month}')
 def save_monthly_plan(system_id: int, month: str, body: MonthlyPlanWrite):
     valid_month(month)
-    codes = [p.currency_code for p in body.plans]
-    if len(codes) != len(set(codes)):
-        raise HTTPException(422, '同一月度预案每个币种只能填写一组金额。')
     with mutation() as c:
-        require_system(c,system_id)
-        existing = {r[0] for r in c.execute(
-            'SELECT currency_code FROM budget_plans WHERE budget_system_id=? AND month=?', (system_id,month))}
-        if existing-set(codes):
-            raise HTTPException(409, '这份月度预案还有其他已保存币种，请重新加载完整预案后再保存。')
         for plan in body.plans:
             try:
                 save_plan_in_connection(c,system_id,month,plan.currency_code,
@@ -479,6 +491,68 @@ def save_monthly_plan(system_id: int, month: str, body: MonthlyPlanWrite):
             except HTTPException as exc:
                 raise HTTPException(exc.status_code, f'{plan.currency_code}：{exc.detail}') from exc
         return monthly_plan_data(c,system_id,month)
+
+
+class PlanVersion(BaseModel):
+    id: int = Field(gt=0)
+    version: int = Field(ge=1)
+
+
+class SystemCurrencyWrite(BaseModel):
+    expected_version: int = Field(ge=1)
+    currency_code: str = Field(min_length=1, max_length=12)
+    plans: list[PlanVersion]
+
+
+def system_currency_data(c, system_id):
+    system = require_system(c,system_id,True)
+    plans = [plan_data(c,system_id,r['month'],r['currency_code']) for r in c.execute(
+        'SELECT month,currency_code FROM budget_plans WHERE budget_system_id=? ORDER BY month,currency_code', (system_id,))]
+    return dict(system=system,expected_version=config_data(c)['version'],plans=plans)
+
+
+@router.get('/api/budget/systems/{system_id}/currency')
+def get_system_currency(system_id: int):
+    with connect() as c:
+        c.execute('BEGIN')
+        return system_currency_data(c,system_id)
+
+
+@router.put('/api/budget/systems/{system_id}/currency')
+def change_system_currency(system_id: int, body: SystemCurrencyWrite):
+    """Correct the denomination of every monthly plan, retaining visible numbers and history."""
+    with mutation(body.expected_version) as c:
+        require_system(c,system_id)
+        places = currency(c,body.currency_code)
+        before = system_currency_data(c,system_id)
+        actual = {(p['id'],p['version']) for p in before['plans']}
+        expected = {(p.id,p.version) for p in body.plans}
+        if actual != expected or len(expected) != len(body.plans):
+            raise HTTPException(409, '月度计划已更新，请重新打开币种预览后再更正。')
+        if len({p['currency_code'] for p in before['plans']})>1:
+            raise HTTPException(409, '此预算存在旧版多币种计划，不能直接合并更正，原记录已完整保留。')
+        # Validate every amount before applying the correction; never round silently.
+        amounts = []
+        for p in before['plans']:
+            try:
+                total = minor(p['total'],places) if p['total'] is not None else None
+                items = [(i['id'],minor(i['amount'],places)) for i in p['items']]
+                if sum(amount for _,amount in items)>10**15:
+                    raise HTTPException(422, '本月分配合计超出支持范围。')
+                amounts.append((total,items))
+            except HTTPException as exc:
+                raise HTTPException(422, f"{p['month']} 的金额不符合 {body.currency_code} 精度或范围，请先修改该月金额。") from exc
+        c.execute('UPDATE budget_systems SET currency_code=? WHERE id=?', (body.currency_code,system_id))
+        for p,(total,items) in zip(before['plans'],amounts):
+            c.execute('INSERT OR IGNORE INTO budget_plan_revisions(plan_id,version,snapshot) VALUES (?,?,?)',
+                      (p['id'],p['version'],json.dumps(p,ensure_ascii=False)))
+            c.execute('UPDATE budget_plans SET currency_code=?,total_minor=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?',
+                      (body.currency_code,total,p['id']))
+            c.executemany('UPDATE budget_plan_items SET amount_minor=? WHERE id=?', [(amount,item_id) for item_id,amount in items])
+            after = plan_data(c,system_id,p['month'],body.currency_code)
+            c.execute('INSERT INTO budget_plan_revisions(plan_id,version,snapshot) VALUES (?,?,?)',
+                      (p['id'],after['version'],json.dumps(after,ensure_ascii=False)))
+    return get_config()
 
 
 @router.get('/api/budget/overview')

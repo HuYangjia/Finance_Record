@@ -55,6 +55,10 @@ def initialize_database() -> None:
     if DATABASE_PATH.exists():
         with sqlite3.connect(DATABASE_PATH) as existing:
             tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if 'budget_systems' in tables and 'currency_code' not in {r[1] for r in existing.execute('PRAGMA table_info(budget_systems)')}:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-currency-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
             if "transactions" in tables and "budget_system_id" not in {r[1] for r in existing.execute('PRAGMA table_info(transactions)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
                 with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
@@ -72,6 +76,12 @@ def initialize_database() -> None:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.executescript(BUDGET_SCHEMA_PATH.read_text(encoding="utf-8"))
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        if 'currency_code' not in {r['name'] for r in connection.execute('PRAGMA table_info(budget_systems)')}:
+            connection.execute('ALTER TABLE budget_systems ADD COLUMN currency_code TEXT REFERENCES currencies(code)')
+            connection.execute('''UPDATE budget_systems SET currency_code=(
+                SELECT MIN(currency_code) FROM budget_plans WHERE budget_system_id=budget_systems.id
+                GROUP BY budget_system_id HAVING COUNT(DISTINCT currency_code)=1)''')
+            connection.execute("UPDATE app_settings SET value=CAST(value AS INTEGER)+1 WHERE key='budget_config_version'")
         if 'budget_system_id' not in {r['name'] for r in connection.execute('PRAGMA table_info(transactions)')}:
             connection.execute('ALTER TABLE transactions ADD COLUMN budget_system_id INTEGER REFERENCES budget_systems(id) ON DELETE RESTRICT')
         connection.execute('CREATE INDEX IF NOT EXISTS transactions_budget_index ON transactions(budget_system_id,transaction_date)')
