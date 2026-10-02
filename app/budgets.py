@@ -149,7 +149,7 @@ def copy_catalog(body: CatalogCopy):
         raise HTTPException(422, '请选择不同的来源预算。')
     with mutation(body.expected_version) as c:
         require_system(c,body.source_system_id,True); require_system(c,body.target_system_id)
-        for table in ('budget_storage_methods','budget_purposes'):
+        for table in ('budget_purposes',):
             if c.execute(f'SELECT 1 FROM {table} WHERE budget_system_id=? AND is_placeholder=0',(body.target_system_id,)).fetchone():
                 raise HTTPException(409, '目标预算已有自定义栏目，请使用仅含待定栏目的新预算。')
             remaining=[dict(r) for r in c.execute(f'SELECT * FROM {table} WHERE budget_system_id=? AND is_placeholder=0',(body.source_system_id,))]
@@ -242,12 +242,14 @@ def save_config_item(collection, item_id, body):
                 if item_id == config['daily_expense'] or item_id in config['defaults'].values() or any(r['budget_system_id']==item_id and r['is_active'] for key in ('rules','presets') for r in config[key]):
                     raise HTTPException(409, '请先更换日常归属及默认预算，并停用或改选引用此预算的映射和预设。')
         else:
-            if body.budget_system_id is None:
-                raise HTTPException(422, '请选择预算系统。')
-            require_system(c, body.budget_system_id, allow_inactive=bool(old and not body.is_active))
-            values = dict(budget_system_id=body.budget_system_id,is_active=int(body.is_active))
+            values = dict(is_active=int(body.is_active))
+            if collection != 'storage':
+                if body.budget_system_id is None:
+                    raise HTTPException(422, '请选择预算系统。')
+                require_system(c, body.budget_system_id, allow_inactive=bool(old and not body.is_active))
+                values['budget_system_id'] = body.budget_system_id
             if collection in ('storage', 'purposes'):
-                if old and old['budget_system_id'] != body.budget_system_id:
+                if collection != 'storage' and old and old['budget_system_id'] != body.budget_system_id:
                     raise HTTPException(422, '栏目不能移到另一预算；请在目标预算新增。')
                 if old and old['is_placeholder']:
                     raise HTTPException(422, '待定栏目由系统保留。')
@@ -257,8 +259,8 @@ def save_config_item(collection, item_id, body):
                         raise HTTPException(422, '不能形成循环层级。')
                     ancestors.add(parent)
                     row = c.execute(f'SELECT * FROM {table} WHERE id=?', (parent,)).fetchone()
-                    if not row or row['budget_system_id'] != body.budget_system_id or row['is_placeholder'] or not row['is_active']:
-                        raise HTTPException(422, '父栏目须属于同一预算并处于启用状态。')
+                    if not row or (collection != 'storage' and row['budget_system_id'] != body.budget_system_id) or row['is_placeholder'] or not row['is_active']:
+                        raise HTTPException(422, '请选择有效、启用的父栏目。')
                     parent = row['parent_id']
                 values.update(name=body.name.strip(),parent_id=body.parent_id,sort_order=body.sort_order,note=body.note)
             else:
@@ -278,7 +280,7 @@ def save_config_item(collection, item_id, body):
         else:
             item_id = c.execute(f"INSERT INTO {table}({','.join(values)}) VALUES ({','.join('?' for _ in values)})", tuple(values.values())).lastrowid
             if collection == 'systems':
-                for dimension, label in [('budget_storage_methods','待定存储方式'),('budget_purposes','待定用途')]:
+                for dimension, label in [('budget_purposes','待定用途')]:
                     c.execute(f'INSERT INTO {dimension}(budget_system_id,name,is_placeholder) VALUES (?,?,1)', (item_id,label))
     return get_config()
 
@@ -309,7 +311,7 @@ def delete_config_item(collection: str, item_id: int, expected_version: int):
         if collection == 'systems':
             # An unused system still owns its initial placeholder rows.
             # Remove leaves first; any plan/history/reference causes a rollback.
-            for dimension in ('budget_storage_methods','budget_purposes'):
+            for dimension in ('budget_purposes',):
                 rows=[dict(r) for r in c.execute(f'SELECT id,parent_id FROM {dimension} WHERE budget_system_id=?',(item_id,))]
                 while rows:
                     parents={r['parent_id'] for r in rows}
@@ -321,8 +323,11 @@ def delete_config_item(collection: str, item_id: int, expected_version: int):
             if row['is_placeholder']:
                 raise HTTPException(409, '待定栏目不能删除。')
             field = 'storage_method_id' if collection=='storage' else 'purpose_id'
+            historic_ids = {item_id}
+            if collection == 'storage':
+                historic_ids.update(r[0] for r in c.execute('SELECT old_id FROM budget_storage_aliases WHERE storage_id=?', (item_id,)))
             for revision in c.execute('SELECT snapshot FROM budget_plan_revisions'):
-                if any(i[field]==item_id for i in json.loads(revision['snapshot'])['items']):
+                if any(i[field] in historic_ids for i in json.loads(revision['snapshot'])['items']):
                     raise HTTPException(409, '历史计划曾使用此栏目，请停用以保留历史。')
         c.execute(f'DELETE FROM {table} WHERE id=?',(item_id,))
     return get_config()
@@ -382,7 +387,7 @@ def plan_data(c, system_id, month, code):
         item.update(amount=money(item['amount_minor'],places),storage_path=storage[item['storage_method_id']]['path'],purpose_path=purposes[item['purpose_id']]['path'])
     data.update(system_name=system['name'],items=items, total=money(data['total_minor'],places) if data['total_minor'] is not None else None,
                 allocated=money(sum(i['amount_minor'] for i in items),places),decimal_places=places,
-                dimensions={key:[r for r in config[key] if r['budget_system_id']==system_id] for key in ('storage','purposes')})
+                dimensions={key:[r for r in config[key] if key=='storage' or r['budget_system_id']==system_id] for key in ('storage','purposes')})
     return data
 
 
@@ -410,6 +415,9 @@ def save_plan_in_connection(c, system_id: int, month: str, code: str, body: Plan
     existing = {i['id']:i for i in before['items']}; seen = set()
     config = config_data(c)
     for item in body.items:
+        alias = c.execute('SELECT storage_id FROM budget_storage_aliases WHERE old_id=?', (item.storage_method_id,)).fetchone()
+        if alias:
+            item.storage_method_id = alias['storage_id']
         if item.id and (item.id not in existing or item.id in seen):
             raise HTTPException(422, '预算明细编号重复或不属于本月。')
         if item.id: seen.add(item.id)
@@ -419,7 +427,7 @@ def save_plan_in_connection(c, system_id: int, month: str, code: str, body: Plan
                 r['id'] for r in config['purposes'] if r['budget_system_id']==system_id and r['is_placeholder'])
         for key, field in [('storage','storage_method_id'),('purposes','purpose_id')]:
             value = getattr(item,field)
-            row = next((r for r in config[key] if r['id']==value and r['budget_system_id']==system_id),None)
+            row = next((r for r in config[key] if r['id']==value and (key=='storage' or r['budget_system_id']==system_id)),None)
             unchanged = item.id in existing and existing[item.id][field]==value
             if row is None or (not unchanged and not row['selectable']):
                 raise HTTPException(422, '新明细须选择本预算中启用的末级栏目。')

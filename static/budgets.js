@@ -79,7 +79,7 @@
     const [next,cfg]=await Promise.all([request(endpoint(key)),request('/api/budget/config')]);
     config=cfg;identity={system:key.system,month:key.month};plan=next;chooseIdentity=selectable;renderEditor();$('plan-editor').hidden=false;$('plan-editor').scrollIntoView({behavior:'smooth',block:'start'});return true;
   }
-  function storageOptions(selected){return config.storage.filter(s=>s.budget_system_id===Number(identity.system)&&((s.selectable&&!s.is_placeholder)||s.id===Number(selected)));}
+  function storageOptions(selected){return config.storage.filter(s=>(s.selectable&&!s.is_placeholder)||s.id===Number(selected));}
   function input(type,value,maxLength){const el=node('input');el.type=type;el.value=value??'';if(maxLength)el.maxLength=maxLength;return el;}
   function field(label,control){const el=node('label',label);el.append(control);return el;}
   const places=g=>config.currencies.find(c=>c.code===g.code).decimal_places;
@@ -143,7 +143,7 @@
       await reload(false);status('预算币种已更正，各月数字保持不变。可以继续修改金额。');
     },code);
   }
-  function openStorage(target=null){if(!identity)return;storageTarget=target;$('new-dimension-name').value='';$('storage-error').textContent='';options($('new-dimension-parent'),config.storage.filter(s=>s.budget_system_id===Number(identity.system)&&s.is_active&&!s.is_placeholder),'顶级栏目','');$('storage-dialog').showModal();}
+  function openStorage(target=null){if(!identity)return;storageTarget=target;$('new-dimension-name').value='';$('storage-error').textContent='';options($('new-dimension-parent'),config.storage.filter(s=>s.is_active&&!s.is_placeholder),'顶级栏目','');$('storage-dialog').showModal();}
   $('storage-form').onsubmit=e=>{e.preventDefault();if(busy)return;action(async()=>{
     $('storage-form').inert=true;
     try{const ids=new Set(config.storage.map(s=>s.id));config=await request('/api/budget/config/storage',{expected_version:config.version,budget_system_id:Number(identity.system),name:$('new-dimension-name').value,parent_id:Number($('new-dimension-parent').value)||null},'POST');const created=config.storage.find(s=>!ids.has(s.id));for(const select of $('currency-budgets').querySelectorAll('[data-field=storage_method_id]')){const selected=select.value;options(select,storageOptions(selected),'选择存储方式',select===storageTarget?created.id:selected);}if(storageTarget)changed();$('storage-dialog').close();status('存储栏目已创建，预算草稿已保留。');}catch(e){$('storage-error').textContent=e.message;throw e;}finally{$('storage-form').inert=false;}

@@ -55,6 +55,10 @@ def initialize_database() -> None:
     if DATABASE_PATH.exists():
         with sqlite3.connect(DATABASE_PATH) as existing:
             tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if 'budget_storage_methods' in tables and 'budget_system_id' in {r[1] for r in existing.execute('PRAGMA table_info(budget_storage_methods)')}:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-shared-storage-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
             if 'budget_systems' in tables and 'currency_code' not in {r[1] for r in existing.execute('PRAGMA table_info(budget_systems)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
                 with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-currency-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
@@ -76,6 +80,8 @@ def initialize_database() -> None:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.executescript(BUDGET_SCHEMA_PATH.read_text(encoding="utf-8"))
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        from app.budget_migrations import migrate_shared_storage
+        migrate_shared_storage(connection)
         if 'currency_code' not in {r['name'] for r in connection.execute('PRAGMA table_info(budget_systems)')}:
             connection.execute('ALTER TABLE budget_systems ADD COLUMN currency_code TEXT REFERENCES currencies(code)')
             connection.execute('''UPDATE budget_systems SET currency_code=(
@@ -107,7 +113,10 @@ def initialize_database() -> None:
             for table, names in [('budget_storage_methods', ['待定存储方式','活期','定期','ETF','股票']),
                                  ('budget_purposes', ['待定用途','日常生活','慈善','留存'])]:
                 for order, name in enumerate(names):
-                    connection.execute(f'INSERT INTO {table}(budget_system_id,name,sort_order,is_placeholder) VALUES (?,?,?,?)', (system_id,name,order,int(order==0)))
+                    if table == 'budget_storage_methods':
+                        connection.execute(f'INSERT INTO {table}(name,sort_order,is_placeholder) VALUES (?,?,?)', (name,order,int(order==0)))
+                    else:
+                        connection.execute(f'INSERT INTO {table}(budget_system_id,name,sort_order,is_placeholder) VALUES (?,?,?,?)', (system_id,name,order,int(order==0)))
             connection.executemany('INSERT INTO app_settings(key,value) VALUES (?,?)', [
                 ('budget_initialized','1'), ('budget_config_version','1'),
                 ('default_expense_budget_system_id',str(system_id)), ('default_income_budget_system_id','null')])
@@ -122,7 +131,7 @@ def initialize_database() -> None:
                     suffix += 1
                     name = f'日常预算 {suffix}'
                 daily_id = connection.execute('INSERT INTO budget_systems(name) VALUES (?)', (name,)).lastrowid
-                for table, label in [('budget_storage_methods','待定存储方式'),('budget_purposes','待定用途')]:
+                for table, label in [('budget_purposes','待定用途')]:
                     connection.execute(f'INSERT INTO {table}(budget_system_id,name,is_placeholder) VALUES (?,?,1)', (daily_id,label))
             else:
                 daily_id = daily['id']

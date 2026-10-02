@@ -6,13 +6,17 @@ CREATE TABLE IF NOT EXISTS budget_systems (
     currency_code TEXT REFERENCES currencies(code)
 );
 CREATE TABLE IF NOT EXISTS budget_storage_methods (
-    id INTEGER PRIMARY KEY, budget_system_id INTEGER NOT NULL REFERENCES budget_systems(id) ON DELETE RESTRICT,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     parent_id INTEGER REFERENCES budget_storage_methods(id) ON DELETE RESTRICT,
     name TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0,
     is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
     is_placeholder INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT ''
 );
-CREATE UNIQUE INDEX IF NOT EXISTS budget_storage_name ON budget_storage_methods(budget_system_id, COALESCE(parent_id,0), name);
+-- The global name index is installed after migration of the legacy per-system catalog.
+CREATE TABLE IF NOT EXISTS budget_storage_aliases (
+    old_id INTEGER PRIMARY KEY,
+    storage_id INTEGER NOT NULL REFERENCES budget_storage_methods(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS budget_purposes (
     id INTEGER PRIMARY KEY, budget_system_id INTEGER NOT NULL REFERENCES budget_systems(id) ON DELETE RESTRICT,
     parent_id INTEGER REFERENCES budget_purposes(id) ON DELETE RESTRICT,

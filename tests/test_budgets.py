@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -126,7 +127,7 @@ class BudgetTest(unittest.TestCase):
 
     def test_budget_overview_totals_currencies_history_and_legacy_labels(self):
         other=self.setting('systems',name='慈善专用')['id']
-        storage=self.setting('storage',name='ETF',budget_system_id=other)['id']
+        storage=self.storage  # Shared by every budget.
         self.plan(month='2026-09',total='1000',allocation_mode=True,items=[dict(storage_method_id=self.storage,amount='600')])
         self.plan(total='200',allocation_mode=True,items=[])
         self.plan(system=other,total='500',allocation_mode=True,items=[dict(storage_method_id=storage,amount='300')])
@@ -327,10 +328,10 @@ class BudgetTest(unittest.TestCase):
     def test_settings_defaults_rules_presets_and_catalog_copy(self):
         other=self.setting('systems',name='工资二')['id']
         self.config=self.call('POST','/api/budget/copy-catalog',dict(expected_version=self.config['version'],source_system_id=self.daily,target_system_id=other))
-        copied=next(r for r in self.config['storage'] if r['budget_system_id']==other and r['name']=='ETF')
-        self.assertNotEqual(copied['id'],self.storage)
-        self.setting('storage',copied['id'],name='股票型ETF',budget_system_id=other)
-        self.assertEqual(next(r for r in self.config['storage'] if r['id']==self.storage)['name'],'ETF')
+        shared=next(r for r in self.config['storage'] if r['name']=='ETF')
+        self.assertEqual(shared['id'],self.storage)
+        self.setting('storage',shared['id'],name='股票型ETF')
+        self.assertEqual(next(r for r in self.config['storage'] if r['id']==self.storage)['name'],'股票型ETF')
         self.setting('rules',mode='expense',category_id=self.categories['expense'],budget_system_id=other)
         self.setting('presets',name='工资B',mode='income',category_id=self.categories['income'],account_id=self.account,budget_system_id=other)
         self.config=self.call('PUT','/api/budget/defaults',dict(expected_version=self.config['version'],expense=other,income=self.daily))
@@ -339,6 +340,64 @@ class BudgetTest(unittest.TestCase):
         unused=self.setting('systems',name='可删除预算')['id']
         self.config=self.call('DELETE',f"/api/budget/config/systems/{unused}?expected_version={self.config['version']}")
         self.assertFalse(any(s['id']==unused for s in self.config['systems']))
+
+    def test_shared_storage_creation_usage_rename_and_deactivation(self):
+        other=self.setting('systems',name='公共存储测试')['id']
+        storage=self.setting('storage',name='公共定存')['id']
+        allocations=[dict(storage_method_id=storage,amount='10')]
+        first=self.plan(items=allocations,total='20')
+        second=self.plan(system=other,items=allocations,total='30')
+        self.setting('storage',storage,name='一年定存')
+        for sid in (self.daily,other):
+            current=self.call('GET',f'/api/budget/plans/{sid}/2026-10/CNY')
+            self.assertEqual(current['items'][0]['storage_path'],'一年定存')
+            self.assertTrue(any(s['id']==storage for s in current['dimensions']['storage']))
+        self.assertEqual(self.call('GET',f'/api/budget/config/storage/{storage}/impact')['item_count'],2)
+        self.setting('storage',storage,name='一年定存',is_active=False)
+        self.plan(system=other,items=second['items'],version=1,total='30')
+        self.call('PUT',f'/api/budget/plans/{other}/2026-11/CNY',dict(expected_version=0,total='30',items=allocations),422)
+        self.assertEqual(first['items'][0]['storage_path'],'公共定存')
+
+    def test_shared_storage_migration_preserves_history_aliases_and_amounts(self):
+        other=self.setting('systems',name='旧目录预算')['id']
+        first=self.plan(total='500')
+        second=self.plan(system=other,total='80',items=[dict(storage_method_id=self.storage,amount='50')])
+        with database.connect() as c:
+            c.execute('PRAGMA foreign_keys=OFF')
+            c.execute('BEGIN')
+            c.execute('''CREATE TABLE old_storage (
+                id INTEGER PRIMARY KEY,budget_system_id INTEGER NOT NULL REFERENCES budget_systems(id),
+                parent_id INTEGER REFERENCES budget_storage_methods(id),name TEXT NOT NULL,
+                sort_order INTEGER DEFAULT 0,is_active INTEGER DEFAULT 1,is_placeholder INTEGER DEFAULT 0,note TEXT DEFAULT '')''')
+            c.execute('INSERT INTO old_storage SELECT id,?,parent_id,name,sort_order,is_active,is_placeholder,note FROM budget_storage_methods',(self.daily,))
+            c.execute("INSERT INTO old_storage(id,budget_system_id,name) VALUES (50,?,'ETF')",(other,))
+            c.execute("INSERT INTO old_storage(id,budget_system_id,name,note) VALUES (60,?,'活期','独立旧说明')",(other,))
+            c.execute('UPDATE budget_plan_items SET storage_method_id=50 WHERE plan_id=?',(second['id'],))
+            snapshot=dict(second,items=[dict(second['items'][0],storage_method_id=50)])
+            c.execute('UPDATE budget_plan_revisions SET snapshot=? WHERE plan_id=?',(json.dumps(snapshot),second['id']))
+            c.execute('DROP TABLE budget_storage_methods')
+            c.execute('ALTER TABLE old_storage RENAME TO budget_storage_methods')
+        database.initialize_database()
+        self.assertEqual(len(list(database.BACKUP_DIR.glob('finance-pre-shared-storage-*.db'))),1)
+        config=self.call('GET','/api/budget/config')
+        self.assertEqual(len([s for s in config['storage'] if s['name']=='ETF']),1)
+        self.assertTrue(any(s['name']=='活期（旧目录预算）' for s in config['storage']))
+        current=self.call('GET',f'/api/budget/plans/{other}/2026-10/CNY')
+        self.assertEqual(current['items'][0]['id'],second['items'][0]['id'])
+        self.assertEqual(current['items'][0]['storage_method_id'],self.storage)
+        self.assertEqual(current['allocated'],'50.00')
+        history=self.call('GET',f'/api/budget/plans/{other}/2026-10/CNY/revisions')
+        self.assertEqual(history[0]['plan']['items'][0]['storage_method_id'],50)
+        # The old ID can still be submitted by a previously open editor.
+        self.plan(system=other,total='80',items=snapshot['items'],version=1)
+        created=self.setting('storage',name='全新公共栏目')['id']
+        self.assertGreater(created,60)
+        self.plan(items=[],version=first['version']);self.plan(system=other,items=[],version=2)
+        self.call('DELETE',f"/api/budget/config/storage/{self.storage}?expected_version={self.config['version']}",code=409)
+        database.initialize_database()
+        self.assertEqual(len(list(database.BACKUP_DIR.glob('finance-pre-shared-storage-*.db'))),1)
+        with database.connect() as c:
+            self.assertEqual(c.execute('PRAGMA foreign_key_check').fetchall(),[])
 
     def test_budget_filter_affects_raw_summary_and_analysis_not_balances(self):
         other=self.setting('systems',name='专项')['id']

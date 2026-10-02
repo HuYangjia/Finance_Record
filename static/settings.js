@@ -5,11 +5,11 @@
   const systemName=id=>config.systems.find(s=>s.id===id)?.name||'未选择';
   const categoryName=id=>categories.find(c=>c.id===id)?.display_name||'未指定分类';
   async function act(fn){if(busy)return;busy=true;document.querySelector('main').inert=true;try{await fn();}catch(e){status(e.message,true);}finally{busy=false;document.querySelector('main').inert=false;}}
-  const copyPanel=node('details'),copyTitle=node('summary','复制其他预算的栏目'),copySource=node('select'),copyTarget=node('select');
+  const copyPanel=node('details'),copyTitle=node('summary','复制历史用途标签'),copySource=node('select'),copyTarget=node('select');
   copyPanel.className='catalog-copy';
   copySource.id='catalog-source';copyTarget.id='catalog-target';
   for(const [label,select] of [['来源预算',copySource],['目标预算（须仅含待定栏目）',copyTarget]]){const el=node('label',label);el.append(select);copyPanel.append(el);}
-  copyPanel.prepend(copyTitle);copyPanel.append(button('复制两套栏目',()=>act(async()=>{config=await request('/api/budget/copy-catalog',{expected_version:config.version,source_system_id:Number(copySource.value),target_system_id:Number(copyTarget.value)},'POST');render();status('栏目已复制，各预算可独立修改。');})));
+  copyPanel.prepend(copyTitle);copyPanel.append(button('复制历史标签',()=>act(async()=>{config=await request('/api/budget/copy-catalog',{expected_version:config.version,source_system_id:Number(copySource.value),target_system_id:Number(copyTarget.value)},'POST');render();status('历史用途标签已复制。存储方式已由所有预算共用。');})));
   $('settings-list').after(copyPanel);
   function render(){
     options(copySource,config.systems,null,copySource.value||config.systems[0]?.id);options(copyTarget,config.systems.filter(s=>s.is_active),null,copyTarget.value||config.systems.at(-1)?.id);
@@ -19,10 +19,11 @@
     const selected=$('settings-system').value||new URLSearchParams(location.search).get('system')||config.systems[0]?.id;
     options($('settings-system'),config.systems,null,selected);
     const key=$('settings-collection').value, dimension=['storage','purposes'].includes(key);
-    $('settings-system').disabled=!dimension;
+    $('settings-system').disabled=key!=='purposes';copyPanel.hidden=key!=='purposes';
     $('settings-hint').textContent=key==='purposes'?'仅用于保留和维护旧记录的用途标签。新预算直接选择预算系统作为用途，无须创建这些标签。':key==='systems'?'这里创建的预算系统就是预算用途。先为每月填写总额，再分配存储方式。':dimension?'存储方式是预算总额下面的二级分配，可继续细分；已使用的栏目请停用保留历史。':'新支出按手动选择、预设、分类映射、模式默认的顺序确定预算。';
     const target=$('settings-list');target.replaceChildren();
-    const rows=config[key].filter(r=>!dimension||r.budget_system_id===Number($('settings-system').value)).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)||a.id-b.id);
+    const rows=config[key].filter(r=>key!=='purposes'||r.budget_system_id===Number($('settings-system').value)).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)||a.id-b.id);
+    if(key==='storage')$('settings-hint').textContent='全部预算共用此目录。新增一次即可选择；改名影响所有预算，已有金额和历史保留。';
     for(const r of rows){
       const row=node('div','','budget-setting-row');
       const title=r.path||r.name||`${r.mode==='expense'?'支出':'入账'} / ${categoryName(r.category_id)}`;
@@ -42,12 +43,12 @@
     const rows=config[editCollection]||[];
     const descendants=new Set(editing?[editing.id]:[]);let changed=true;
     while(changed){changed=false;for(const r of rows)if(descendants.has(r.parent_id)&&!descendants.has(r.id)){descendants.add(r.id);changed=true;}}
-    options($('setting-parent'),rows.filter(r=>r.budget_system_id===Number($('setting-system').value)&&r.is_active&&!r.is_placeholder&&!descendants.has(r.id)),'顶级栏目',selected);
+    options($('setting-parent'),rows.filter(r=>(editCollection==='storage'||r.budget_system_id===Number($('setting-system').value))&&r.is_active&&!r.is_placeholder&&!descendants.has(r.id)),'顶级栏目',selected);
   }
   async function open(key,row=null){
     editCollection=key;editing=row;$('setting-form').reset();
     const dimension=['storage','purposes'].includes(key);
-    const fields=new Set(key==='systems'?['name','currency','order','note']:dimension?['name','system','parent','order','note']:key==='rules'?['system','mode','category']:['name','system','mode','category','account']);
+    const fields=new Set(key==='systems'?['name','currency','order','note']:key==='storage'?['name','parent','order','note']:dimension?['name','system','parent','order','note']:key==='rules'?['system','mode','category']:['name','system','mode','category','account']);
     document.querySelectorAll('[data-setting]').forEach(e=>{e.hidden=!fields.has(e.dataset.setting);for(const i of e.querySelectorAll('input,select'))i.disabled=e.hidden;});
     options($('setting-system'),config.systems.filter(s=>s.is_active||s.id===row?.budget_system_id),null,row?.budget_system_id||$('settings-system').value||config.systems[0]?.id);
     if(dimension&&row)$('setting-system').disabled=true;
@@ -70,7 +71,7 @@
   $('setting-form').onsubmit=e=>{e.preventDefault();act(async()=>{
     const key=editCollection, body={expected_version:config.version,is_active:$('setting-active').value==='1'};
     if(key!=='rules')body.name=$('setting-name').value;
-    if(key!=='systems')body.budget_system_id=Number($('setting-system').value);
+    if(!['systems','storage'].includes(key))body.budget_system_id=Number($('setting-system').value);
     if(key==='systems'&&!$('setting-currency').disabled)body.currency_code=$('setting-currency').value||null;
     if(['systems','storage','purposes'].includes(key)){body.sort_order=Number($('setting-order').value);body.note=$('setting-note').value;}
     if(['storage','purposes'].includes(key))body.parent_id=Number($('setting-parent').value)||null;
