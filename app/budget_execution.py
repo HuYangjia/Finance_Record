@@ -59,6 +59,13 @@ def execution_report(c, end_month, start_month=None, system_id=None, currency_co
                 expenses[target].append(entry)
     wanted=[month_name(i) for i in range(month_index(start_month),month_index(end_month)+1)]
     rows=[]
+    from app.budget_funding import FundingCatalog
+    funding=FundingCatalog(c)
+    funding_issues=defaultdict(list)
+    for binding in funding.bindings:
+        source=funding.for_plan(binding['plan_id'])
+        if source['reason'] or source['overallocated']:
+            funding_issues[binding['budget_system_id']].append(dict(month=binding['month'],title=source['title'],status=source['status']))
     for system in config['systems']:
         sid=system['id']; code=system['currency_code']; places=currencies.get(code,2)
         if system_id is not None and sid!=system_id or currency_code and code!=currency_code:
@@ -120,7 +127,7 @@ def execution_report(c, end_month, start_month=None, system_id=None, currency_co
                 rows.append(dict(budget_system_id=sid,system_name=system['name'],currency_code=code,month=month,
                                  origin_month=origin,origin_automatic=not system['execution_start_month'],started=True,
                                  compiled=month in compiled,complete=complete,reason=reason,
-                                 warnings=list(past_issues),entry_count=counts[month],nearest_count=nearest[month],
+                                 warnings=list(past_issues),funding_warnings=[w for w in funding_issues[sid] if origin<=w['month']<=month],entry_count=counts[month],nearest_count=nearest[month],
                                  prior_nearest_count=prior_nearest,known_expense=money(spent,places),
                                  **{key:money(value,places) if value is not None else None for key,value in amounts.items()}))
             prior_nearest+=nearest[month]

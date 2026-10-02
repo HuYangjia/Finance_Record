@@ -69,6 +69,11 @@ def validate_group(connection, payload, group_id=None):
         raise HTTPException(404, '冲销事项不存在。')
     if original and payload.expected_version != original['version']:
         raise HTTPException(409, '事项已经更新，请重新打开后核对；当前编辑尚未保存。')
+    from app.budget_funding import guard_reference
+    for member_id in ids:
+        guard_reference(connection,'transaction',member_id)
+    if original and original['kind']!=payload.kind:
+        guard_reference(connection,'offset_group',group_id)
     metadata = {'id': group_id or 0, 'title': payload.title.strip(), 'kind': payload.kind,
                 'note': (payload.note or '').strip() or None, 'version': original['version'] if original else 1}
     # Dates, category and anchor always come from the original atomic records.
@@ -132,6 +137,8 @@ def dissolve_group(group_id: int, payload: OffsetDelete):
         before = group_snapshot(connection, group_id)
         if payload.expected_version != before['version']:
             raise HTTPException(409, '事项已经更新，请刷新后重试。')
+        from app.budget_funding import guard_reference
+        guard_reference(connection,'offset_group',group_id)
         connection.execute('DELETE FROM transaction_offset_groups WHERE id=?', (group_id,))
         audit_group(connection, group_id, 'delete', backup.name, before)
     return {'id': group_id, 'deleted': True}

@@ -3812,6 +3812,8 @@ def delete_transaction(transaction_id: int, deletion: TransactionDelete):
         current = fetch_transaction_snapshot(connection, transaction_id)
         if current is None:
             raise HTTPException(status_code=404, detail="流水不存在。")
+        from app.budget_funding import guard_reference
+        guard_reference(connection,'transaction',transaction_id)
         connection.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
         write_audit_log(
             connection,

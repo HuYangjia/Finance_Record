@@ -12,10 +12,17 @@
   }
   const sum=(rows,key,places)=>rows.reduce((n,row)=>n+minor(row[key],places),0n);
   function query(value=scope){const q=new URLSearchParams({end_month:value.month,start_month:value.start||'0001-01'});if(value.system)q.set('system_id',value.system);if(value.code)q.set('currency_code',value.code);return q;}
-  async function action(fn){if(busy)return;busy=true;document.querySelector('main').inert=true;try{await fn();}catch(e){status(e.message,true);$('plan-error').textContent=e.message;}finally{busy=false;document.querySelector('main').inert=false;}}
+  async function action(fn){
+    if(busy)return;busy=true;const editor=$('plan-editor');document.querySelector('main').inert=true;editor.inert=true;
+    try{await fn();}catch(e){status(e.message,true);$('plan-error').textContent=e.message;if(editor.open)$('plan-error').scrollIntoView({block:'nearest'});}
+    finally{
+      busy=false;document.querySelector('main').inert=false;editor.inert=false;
+      if(editor.open&&!editor.contains(document.activeElement)&&!document.querySelector('dialog[open]:not(#plan-editor)'))editor.querySelector('input:not(:disabled),select:not(:disabled)')?.focus({preventScroll:true});
+    }
+  }
   const allowDiscard=()=>!dirty||confirm('当前草稿尚未保存，确定放弃修改？');
   function restoreScope(){if(!scope)return;for(const key of ['system','month','start'])$('plan-'+key).value=scope[key];$('plan-currency').value=scope.code;}
-  function closeEditor(){$('plan-editor').hidden=true;dirty=false;identity=null;plan=null;groups=[];}
+  function closeEditor(){for(const g of groups)g.funding?.dispose();$('plan-editor').close();dirty=false;identity=null;plan=null;groups=[];}
   async function reload(close=true){
     const next={system:$('plan-system').value,month:$('plan-month').value,code:$('plan-currency').value,start:$('plan-start').value};
     try{
@@ -39,12 +46,18 @@
       const card=node('div','','metric-card is-featured');card.append(node('span',`${block.currency_code} · ${scope.month} 总预算`,'metric-label'),node('strong',block.monthly.budget_total),node('small',`已分配 ${block.monthly.allocated} · 待分配 ${block.monthly.unallocated}`,'metric-caption'),node('small',`所选区间累计总预算 ${block.cumulative.budget_total}`,'metric-caption'));metrics.append(card);
     }
     const host=$('month-plans');host.replaceChildren();const rows=overview.plans.filter(p=>p.month===scope.month);
-    if(!rows.length)host.append(node('p','这个月还没有预算。点击“新增预算”，选择用途和月份，再填写金额与币种。','plan-empty'));
+    if(!rows.length)host.append(node('p','这个月还没有预算。点击“新增预案”，选择用途和月份，再填写金额与币种。','plan-empty'));
     else{
-      const table=node('table'),head=node('thead'),tr=node('tr');for(const title of ['用途（预算系统）','总预算','已分配存储','待分配','操作'])tr.append(node('th',title));head.append(tr);table.append(head);const body=node('tbody');
-      for(const id of new Set(rows.map(p=>p.budget_system_id))){const list=rows.filter(p=>p.budget_system_id===id),p=list[0],tr=node('tr');tr.dataset.systemId=id;tr.append(node('td',p.system_name));for(const field of ['budget_total','allocated','unallocated']){const td=node('td');for(const row of list)td.append(node('div',`${row[field]} ${row.currency_code}`,'currency-line'));tr.append(td);}const td=node('td');td.append(button(p.is_active?'编辑整份预案':'查看整份预案',()=>action(()=>openEditor({system:id,month:p.month}))));tr.append(td);body.append(tr);}table.append(body);host.append(table);
+      const table=node('table'),head=node('thead'),tr=node('tr');for(const title of ['用途（预算系统）','总预算','已分配存储','待分配','收入来源','操作'])tr.append(node('th',title));head.append(tr);table.append(head);const body=node('tbody');
+      for(const id of new Set(rows.map(p=>p.budget_system_id))){const list=rows.filter(p=>p.budget_system_id===id),p=list[0],tr=node('tr');tr.dataset.systemId=id;tr.append(node('td',p.system_name));for(const field of ['budget_total','allocated','unallocated']){const td=node('td');for(const row of list)td.append(node('div',`${row[field]} ${row.currency_code}`,'currency-line'));tr.append(td);}const sourceCell=node('td');sourceCell.append(fundingLabel(p.funding));tr.append(sourceCell);const td=node('td');td.append(button(p.is_active?'编辑整份预案':'查看整份预案',()=>action(()=>openEditor({system:id,month:p.month}))));tr.append(td);body.append(tr);}table.append(body);host.append(table);
     }
     renderMatrix();renderExecution();
+  }
+  function fundingLabel(source){
+    const host=node('div','','plan-funding-label');
+    if(!source){host.append(node('span','未绑定来源','subtle-note'));return host;}
+    const link=node('a',source.title);link.href=source.url;link.target='_blank';link.rel='noopener';host.append(link);
+    host.append(node('small',source.status,source.reason||source.overallocated?'funding-warning':'subtle-note'));return host;
   }
   function executionTable(rows,history=false){
     const table=node('table'),head=node('thead'),tr=node('tr');
@@ -57,6 +70,7 @@
       const state=node('td');state.append(node('div',row.reason||(!row.complete?'结余未完整计算':row.compiled?'已编制':'未编制 · 新增按零')));
       if(row.started)state.append(node('small',`起算 ${row.origin_month}`));
       if(row.nearest_count||row.prior_nearest_count)state.append(node('div','含邻近日期汇率','subtle-note'));
+      for(const warning of row.funding_warnings||[])state.append(node('div',`${warning.month} · ${warning.title}：${warning.status}`,'funding-warning'));
       for(const warning of row.warnings){const text=`${warning.month} · ${warning.title}：${warning.reason}`;if(warning.entry_type==='offset_group'){const link=node('a',text);link.href=`/offsets?group=${warning.entry_id}`;state.append(link);}else state.append(node('div',text));}
       tr.append(state);
       if(!history){const actions=node('td');actions.append(button('结转历史',()=>action(()=>showExecutionHistory(row))),button(row.compiled?'编辑计划':'编制计划',()=>action(()=>openEditor({system:row.budget_system_id,month:row.month}))));tr.append(actions);}
@@ -106,7 +120,7 @@
   async function openEditor(key,selectable=false){
     if(!allowDiscard())return false;
     const [next,cfg]=await Promise.all([request(endpoint(key)),request('/api/budget/config')]);
-    config=cfg;identity={system:key.system,month:key.month};plan=next;chooseIdentity=selectable;renderEditor();$('plan-editor').hidden=false;$('plan-editor').scrollIntoView({behavior:'smooth',block:'start'});return true;
+    config=cfg;identity={system:key.system,month:key.month};plan=next;chooseIdentity=selectable;renderEditor();if(!$('plan-editor').open)$('plan-editor').showModal();$('plan-editor').querySelector('.plan-editor-scroll').scrollTop=0;return true;
   }
   function storageOptions(selected){return config.storage.filter(s=>(s.selectable&&!s.is_placeholder)||s.id===Number(selected));}
   function input(type,value,maxLength){const el=node('input');el.type=type;el.value=value??'';if(maxLength)el.maxLength=maxLength;return el;}
@@ -126,6 +140,7 @@
     const header=node('div','','currency-budget-heading'),amount=node('div','','currency-amount-input');amount.append(field('总预算金额',g.total),field('币种',g.currency));header.append(amount);
     const version=node('span',saved?.version?`${currency} · 已保存版本 ${saved.version}`:'新增金额','plan-state');version.dataset.role='version';header.append(version);
     g.el.append(header,field('本月计划说明（可选）',g.note));
+    g.funding=BudgetFunding.create(g.el,saved?.funding||null,()=>({planId:g.saved.id,code:g.code,total:g.total.value}),changed);
     if(saved?.id&&saved.total===null)g.el.append(node('p','旧计划未填总额，暂按原明细合计展示，确认后保存。','subtle-note'));
     const heading=node('div','','allocation-heading');heading.append(node('h3','二级存储分配'),g.balance);g.balance.setAttribute('role','status');g.el.append(heading,g.caption);
     const table=node('table'),head=node('thead'),tr=node('tr');for(const title of ['存储方式','分配金额','明细名称（可选）','备注（可选）','操作'])tr.append(node('th',title));head.append(tr);table.append(head,g.items);const wrap=node('div','','table-wrap plan-items-wrap');wrap.append(table);g.el.append(wrap,g.empty,button('＋分配存储方式',()=>{addRow(g);changed();},'secondary-button add-allocation'));
@@ -133,9 +148,9 @@
     g.currency.onchange=()=>{
       const code=g.currency.value;
       if(plan.currency_code){g.currency.value=g.code;action(()=>changeCurrency(code));return;}
-      g.code=code;g.el.dataset.currency=code;updateGroup(g);refreshCurrencyOptions();changed();
+      g.code=code;g.el.dataset.currency=code;updateGroup(g);refreshCurrencyOptions();changed();g.funding.schedule();
     };
-    g.total.oninput=changed;g.note.oninput=changed;
+    g.total.oninput=()=>{changed();g.funding.schedule();};g.note.oninput=changed;
     for(const item of saved?.items||[])addRow(g,item);updateGroup(g);refreshCurrencyOptions();return g;
   }
   function addRow(g,item={}){
@@ -154,18 +169,19 @@
     try{const total=minor(g.total.value||'0',places(g)),allocated=sum(draftItems(g).map(i=>({...i,amount:i.amount||'0'})),'amount',places(g)),gap=total-allocated;g.balance.textContent=`已分配 ${money(allocated,places(g))} · ${gap<0n?'超出总预算':'待分配'} ${money(gap<0n?-gap:gap,places(g))} ${g.code}`;g.balance.classList.toggle('is-over-budget',gap<0n);}catch(e){g.balance.textContent=e.message;}
   }
   function renderEditor(){
-    setIdentityControls();$('currency-budgets').replaceChildren();groups=[];
+    for(const g of groups)g.funding?.dispose();setIdentityControls();$('currency-budgets').replaceChildren();groups=[];
     for(const p of plan.plans)addGroup(p);if(!groups.length)addGroup();dirty=false;
     $('plan-state').textContent=`${plan.system_name} · ${identity.month} · ${plan.plans.length?'已保存 · '+(plan.currency_code||'旧多币种待整理'):'尚未编制'}`;$('plan-state').classList.remove('is-dirty');
-    $('plan-editor-title').textContent=`${identity.month} · ${plan.system_name} · 月度预案`;$('save-plan').textContent=`保存 ${identity.month} 整份预案`;$('plan-error').textContent='';
+    $('plan-editor-title').textContent=`${identity.month} · ${plan.system_name}`;$('save-plan').textContent='保存并关闭';$('plan-error').textContent='';
     const system=config.systems.find(s=>s.id===Number(identity.system)),inactive=!system?.is_active||system.currency_conflict;
     for(const control of $('plan-form').querySelectorAll('input,select,button'))control.disabled=inactive&&!['close-plan','plan-history'].includes(control.id);
+    for(const id of ['save-plan','add-storage'])$(id).disabled=inactive;
     for(const id of ['entry-system','entry-month'])$(id).disabled=!chooseIdentity||inactive;
     refreshCurrencyOptions();$('copy-plan').disabled=inactive;
     $('plan-identity-hint').textContent=system.currency_conflict?'旧版计划包含多种币种，原金额与历史已完整保留，暂只供查看，请先确认整理方式。':'同一预算的所有月份使用一种币种。修改币种会先预览全部月份，数字保持不变；实际消费可用其他币种，比较时再折算。';
   }
   async function changeCurrency(code){
-    if(dirty)throw new Error('请先保存或收起当前草稿，再修改预算币种。');
+    if(dirty)throw new Error('请先保存或取消当前草稿，再修改预算币种。');
     await BudgetCurrency.open(Number(identity.system),config,async next=>{
       config=next;await openEditor(identity,chooseIdentity);
       if($('plan-currency').value)$('plan-currency').value=plan.currency_code;
@@ -183,13 +199,16 @@
     const key={system:$('entry-system').value,month:$('entry-month').value};
     try{if(!validMonth(key.month))throw new Error('请选择有效的预算月份。');if(!await openEditor(key,true))setIdentityControls();}catch(e){setIdentityControls();throw e;}
   });
-  $('close-plan').onclick=()=>{if(allowDiscard())closeEditor();};$('change-currency').onclick=()=>action(()=>changeCurrency());
+  const dismissEditor=()=>{if(busy)return;if(allowDiscard())closeEditor();else status('已保留未保存草稿。');};
+  $('close-plan').onclick=dismissEditor;$('dismiss-plan').onclick=dismissEditor;
+  $('plan-editor').addEventListener('cancel',e=>{e.preventDefault();dismissEditor();});
+  $('change-currency').onclick=()=>action(()=>changeCurrency());
   $('plan-form').onsubmit=e=>{e.preventDefault();action(async()=>{
     if(groups.length!==1)throw new Error('一个预算只能使用一种币种。');
-    const plans=groups.map(g=>{const items=draftItems(g),total=g.total.value,allocated=sum(items,'amount',places(g));if(allocated>minor(total,places(g)))throw new Error(`${g.code}：存储分配合计不能超过总预算，请调整总额或分配金额。`);return {currency_code:g.code,expected_version:g.saved.version,total,note:g.note.value,items};});
-    plan=await request(endpoint(),{plans},'PUT');dirty=false;config=await request('/api/budget/config');chooseIdentity=false;renderEditor();
-    $('plan-month').value=identity.month;if($('plan-start').value>identity.month)$('plan-start').value='';if($('plan-system').value&&Number($('plan-system').value)!==Number(identity.system))$('plan-system').value='';
-    await reload(false);status(`${identity.month} · ${plan.system_name} 计划已保存，预算币种为 ${plan.currency_code}。`);
+    const plans=[];for(const g of groups){const items=draftItems(g),total=g.total.value,allocated=sum(items,'amount',places(g));if(allocated>minor(total,places(g)))throw new Error(`${g.code}：存储分配合计不能超过总预算，请调整总额或分配金额。`);plans.push({currency_code:g.code,expected_version:g.saved.version,total,note:g.note.value,items,funding:await g.funding.payload()});}
+    const saved=await request(endpoint(),{plans},'PUT'),savedIdentity={...identity};dirty=false;plan=saved;chooseIdentity=false;closeEditor();
+    $('plan-month').value=savedIdentity.month;if($('plan-start').value>savedIdentity.month)$('plan-start').value='';if($('plan-system').value&&Number($('plan-system').value)!==Number(savedIdentity.system))$('plan-system').value='';
+    try{config=await request('/api/budget/config');await reload();status(`${savedIdentity.month} · ${saved.system_name} 预案已保存，预算币种为 ${saved.currency_code}。`);}catch(e){throw new Error(`预案已保存，但概览刷新失败：${e.message}。请重新加载页面，勿重复新增。`);}
   });};
   $('copy-plan').onclick=()=>action(async()=>{
     const month=$('copy-month').value;if(!validMonth(month)||month===identity.month)throw new Error('请选择另一个有效的来源月份。');
@@ -197,12 +216,12 @@
     if(source.plans.length!==1||source.currency_code!==plan.currency_code)throw new Error('预算币种已改变或存在旧多币种计划，请重新加载。');
     if(!confirm(`复制 ${month} 的总预算及存储分配，替换当前草稿？保存后生效。`))return;
     const p=source.plans[0],g=groups[0];g.total.value=p.total??p.allocated;g.note.value=p.note;g.items.replaceChildren();for(const i of p.items)addRow(g,{...i,id:undefined,storage_method_id:config.storage.find(s=>s.id===i.storage_method_id&&s.selectable&&!s.is_placeholder)?i.storage_method_id:undefined});
-    changed();status('已复制为草稿。请检查总额及存储分配后保存。');
+    changed();g.funding.schedule();status('已复制为草稿。请检查总额及存储分配后保存。');
   });
   $('plan-history').onclick=()=>action(async()=>{
     const histories=await Promise.all(plan.plans.map(async p=>({code:p.currency_code,rows:await request(`/api/budget/plans/${identity.system}/${identity.month}/${p.currency_code}/revisions`)})));
     $('budget-detail-title').textContent=`${identity.month} · ${plan.system_name} 历史版本`;const host=$('budget-detail-content');host.replaceChildren();
-    for(const h of histories){for(const r of h.rows){const detail=node('details'),p=r.plan;detail.append(node('summary',`版本 ${r.version} · ${r.created_at} · 总预算 ${p.total??p.allocated} ${p.currency_code} · 存储分配 ${p.allocated}`));for(const i of p.items)detail.append(node('p',`${i.storage_path} · ${i.amount} ${p.currency_code} · ${i.title} · ${i.note}`));host.append(detail);}}if(!histories.length)host.append(node('p','尚无保存版本。'));$('budget-detail-dialog').showModal();
+    for(const h of histories){for(const r of h.rows){const detail=node('details'),p=r.plan;detail.append(node('summary',`版本 ${r.version} · ${r.created_at} · 总预算 ${p.total??p.allocated} ${p.currency_code} · 存储分配 ${p.allocated}`));detail.append(node('p',p.funding?`收入来源：${p.funding.title} · 保存时净收入 ${p.funding.net??'未完整'} ${p.funding.currency_code} · ${p.funding.status}`:'收入来源：未绑定'));for(const i of p.items)detail.append(node('p',`${i.storage_path} · ${i.amount} ${p.currency_code} · ${i.title} · ${i.note}`));host.append(detail);}}if(!histories.length)host.append(node('p','尚无保存版本。'));$('budget-detail-dialog').showModal();
   });
   $('budget-load').onsubmit=e=>{e.preventDefault();action(async()=>{if(allowDiscard())await reload();else restoreScope();});};
   $('plan-month').onchange=()=>switchMonth($('plan-month').value);$('plan-previous-month').onclick=()=>shiftMonth(-1);$('plan-next-month').onclick=()=>shiftMonth(1);$('plan-current-month').onclick=()=>switchMonth(currentMonth());

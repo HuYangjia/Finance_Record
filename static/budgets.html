@@ -5,7 +5,7 @@
   <title>个人财务账本 - 预算计划</title>
   <link rel="icon" href="/static/compass-rose.svg">
   <link rel="stylesheet" href="/static/styles.css?v=20261001-2">
-  <link rel="stylesheet" href="/static/workspace.css?v=20261002-4">
+  <link rel="stylesheet" href="/static/workspace.css?v=20261002-6">
 </head>
 <body>
 <header class="topbar"><div class="topbar-inner">
@@ -19,7 +19,7 @@
 <main class="budget-main plan-main">
   <div class="page-intro"><div><p class="eyebrow">第六页 / 预算计划</p><h2>一个预算，一种币种。</h2><p>逐月填写总额，再分配到活期、定期、ETF 等存储方式。</p></div><a id="manage-budget" class="text-link" href="/settings">管理预算与存储方式 ↗</a></div>
   <section class="transactions-panel plan-scope-panel">
-    <div class="section-heading"><h2>查看月度计划</h2><button id="new-budget" type="button">＋新增预算</button></div>
+    <div class="section-heading"><h2>查看月度计划</h2><button id="new-budget" type="button">＋新增预案</button></div>
     <form id="budget-load">
       <div class="form-grid plan-scope-grid">
         <label>用途（预算系统）<select id="plan-system"></select></label>
@@ -42,26 +42,24 @@
     <div class="section-heading"><div><p class="eyebrow">01 / 用途总预算</p><h2 id="month-plans-title">所选月预算</h2></div><span class="small-badge">总额只录一次</span></div>
     <div id="month-plans" class="table-wrap"></div>
   </section>
-  <section id="plan-editor" class="transactions-panel plan-editor-panel" hidden>
-    <div class="section-heading"><div><p class="eyebrow">编制 / 修改</p><h2 id="plan-editor-title">新增预算</h2></div><span id="plan-state" class="plan-state"></span></div>
-    <form id="plan-form">
-      <div class="form-grid monthly-identity">
-        <label>用途（预算系统）<select id="entry-system" required></select></label>
-        <label>预算月份<input id="entry-month" type="month" min="0001-01" max="9999-12" required></label>
-      </div>
-      <p id="plan-identity-hint" class="subtle-note"></p>
-      <div id="currency-budgets"></div>
-      <div class="form-actions plan-actions"><button id="change-currency" type="button" class="secondary-button">修改预算币种</button><button id="add-storage" type="button" class="secondary-button">＋新增存储栏目</button><button id="plan-history" type="button" class="secondary-button">历史版本</button><button id="close-plan" type="button" class="secondary-button">收起</button><button id="save-plan" type="submit">保存月度计划</button></div>
-    </form>
-    <details class="collapsible-details plan-copy"><summary>从其他月份复制计划</summary><p class="subtle-note">复制同一预算的月度总额及存储分配，保存后才生效。</p><div class="copy-controls"><label>来源月份<input id="copy-month" type="month"></label><button id="copy-plan" type="button" class="secondary-button">预览复制（保存后生效）</button></div></details>
-  </section>
   <section class="transactions-panel matrix-panel">
     <div class="section-heading"><div><p class="eyebrow">02 / 交叉总表</p><h2>预算用途 × 存储方式</h2></div><span class="small-badge">按币种分别展示</span></div>
     <div class="form-grid matrix-controls"><label>查看范围<select id="matrix-scope"><option value="month">所选月预算</option><option value="cumulative">累计预算</option></select></label><label>栏目层级<select id="matrix-level"><option value="leaf">展开全部明细</option><option value="root">按一级存储方式汇总</option></select></label><button id="matrix-transpose" type="button" class="secondary-button">交换行列</button></div>
     <p id="matrix-caption" class="subtle-note"></p><div id="budget-matrix"></div>
   </section>
 </main>
+<dialog id="plan-editor" class="app-dialog plan-editor-dialog" aria-labelledby="plan-editor-title">
+  <div class="dialog-heading plan-editor-heading"><div><p class="eyebrow">月度预案</p><h2 id="plan-editor-title">新增预案</h2><span id="plan-state" class="plan-state"></span></div><button id="dismiss-plan" type="button" class="secondary-button" aria-label="关闭预案">×</button></div>
+  <div class="plan-editor-scroll">
+    <form id="plan-form">
+      <div class="form-grid monthly-identity"><label>用途（预算系统）<select id="entry-system" required></select></label><label>预算月份<input id="entry-month" type="month" min="0001-01" max="9999-12" required></label></div>
+      <p id="plan-identity-hint" class="subtle-note"></p><div id="currency-budgets"></div>
+    </form>
+    <details class="collapsible-details plan-copy"><summary>从其他月份复制计划</summary><p class="subtle-note">复制总额与存储分配，保留本预案的来源绑定；保存后生效。</p><div class="copy-controls"><label>来源月份<input id="copy-month" type="month"></label><button id="copy-plan" type="button" class="secondary-button">预览复制（保存后生效）</button></div></details>
+  </div>
+  <div class="plan-editor-footer"><div class="plan-editor-tools"><button id="change-currency" type="button" class="secondary-button">修改预算币种</button><button id="add-storage" type="button" class="secondary-button">＋新增存储栏目</button><button id="plan-history" type="button" class="secondary-button">历史版本</button></div><div class="form-actions"><button id="close-plan" type="button" class="secondary-button">取消</button><button id="save-plan" type="submit" form="plan-form">保存并关闭</button></div></div>
+</dialog>
 <dialog id="budget-detail-dialog" class="app-dialog budget-dialog"><div class="dialog-heading"><h2 id="budget-detail-title">预算明细</h2><button type="button" data-budget-close aria-label="关闭">×</button></div><div id="budget-detail-content"></div></dialog>
 <dialog id="storage-dialog" class="app-dialog budget-dialog"><form id="storage-form"><h2>新增存储方式</h2><label>名称<input id="new-dimension-name" maxlength="120" required></label><label>父栏目<select id="new-dimension-parent"></select></label><p id="storage-error" role="alert"></p><div class="form-actions"><button type="button" id="cancel-storage" class="secondary-button">取消</button><button type="submit">创建栏目</button></div></form></dialog>
-<script src="/static/budget-ui.js?v=20261001-2"></script><script src="/static/budget-currency.js?v=20261002-4"></script><script src="/static/budgets.js?v=20261002-4"></script>
+<script src="/static/budget-ui.js?v=20261001-2"></script><script src="/static/budget-currency.js?v=20261002-6"></script><script src="/static/budget-funding.js?v=20261002-6"></script><script src="/static/budgets.js?v=20261002-6"></script>
 </body></html>

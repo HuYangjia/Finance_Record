@@ -388,12 +388,19 @@ class PlanItem(BaseModel):
     note: str = Field(default='', max_length=500)
 
 
+class FundingWrite(BaseModel):
+    entry_type: str = Field(pattern='^(transaction|offset_group)$')
+    entry_id: int = Field(gt=0)
+    expected_token: str = Field(min_length=64,max_length=64)
+
+
 class PlanWrite(BaseModel):
     expected_version: int = Field(ge=0)
     total: Decimal | None = Field(default=None, ge=0)
     note: str = Field(default='', max_length=500)
     items: list[PlanItem] = Field(default_factory=list, max_length=2000)
     allocation_mode: bool = False
+    funding: FundingWrite | None = None
 
 
 def plan_data(c, system_id, month, code):
@@ -409,7 +416,32 @@ def plan_data(c, system_id, month, code):
     data.update(system_name=system['name'],items=items, total=money(data['total_minor'],places) if data['total_minor'] is not None else None,
                 allocated=money(sum(i['amount_minor'] for i in items),places),decimal_places=places,
                 dimensions={key:[r for r in config[key] if key=='storage' or r['budget_system_id']==system_id] for key in ('storage','purposes')})
+    from app.budget_funding import FundingCatalog
+    data['funding'] = FundingCatalog(c).for_plan(data['id']) if data['id'] and c.execute('SELECT 1 FROM budget_plan_funding WHERE plan_id=?',(data['id'],)).fetchone() else None
     return data
+
+
+@router.get('/api/budget/funding-sources')
+def funding_sources(keyword: str = '', plan_id: int | None = None, entry_type: str | None = None,
+                    entry_id: int | None = None, currency_code: str | None = None,
+                    total: Decimal | None = None, offset: int = 0, limit: int = 30):
+    from app.budget_funding import FundingCatalog
+    if offset<0 or not 1<=limit<=100 or len(keyword)>120:
+        raise HTTPException(422,'查询条件不正确。')
+    with connect() as c:
+        c.execute('BEGIN')
+        if plan_id is not None and not c.execute('SELECT 1 FROM budget_plans WHERE id=?',(plan_id,)).fetchone():
+            raise HTTPException(404,'预案不存在。')
+        catalog=FundingCatalog(c)
+        if entry_type is not None or entry_id is not None:
+            if entry_type not in ('transaction','offset_group') or not entry_id or entry_id<1:
+                raise HTTPException(422,'收入来源参数不正确。')
+            return catalog.preview(entry_type,entry_id,plan_id,currency_code,total)
+        keys=[key for key,e in catalog.entries.items() if keyword.strip().casefold() in
+              ' '.join([e['title'],e.get('note') or '']+[m.get('note') or '' for m in e['members']]).casefold()]
+        keys.sort(key=lambda key:(catalog.entries[key]['statistics_date'],key[1]),reverse=True)
+        return dict(total=len(keys),offset=offset,limit=limit,
+                    sources=[catalog.preview(*key,plan_id,currency_code,total) for key in keys[offset:offset+limit]])
 
 
 @router.get('/api/budget/plans/{system_id}/{month}/{code}')
@@ -421,6 +453,8 @@ def get_plan(system_id: int, month: str, code: str):
 
 def save_plan_in_connection(c, system_id: int, month: str, code: str, body: PlanWrite):
     before = plan_data(c,system_id,month,code)
+    from app.budget_funding import validate_preview, save_binding
+    validate_preview(c,body,before)
     system = require_system(c,system_id)
     codes = {r[0] for r in c.execute('SELECT DISTINCT currency_code FROM budget_plans WHERE budget_system_id=?', (system_id,))}
     if len(codes)>1 or (codes and system['currency_code'] and codes != {system['currency_code']}):
@@ -471,6 +505,7 @@ def save_plan_in_connection(c, system_id: int, month: str, code: str, body: Plan
             c.execute('UPDATE budget_plan_items SET storage_method_id=?,purpose_id=?,title=?,amount_minor=?,sort_order=?,note=? WHERE id=?', (*values,item.id))
         else:
             c.execute('INSERT INTO budget_plan_items(storage_method_id,purpose_id,title,amount_minor,sort_order,note,plan_id) VALUES (?,?,?,?,?,?,?)', (*values,plan_id))
+    save_binding(c,plan_id,code,body.total,body,before)
     result = plan_data(c,system_id,month,code)
     c.execute('INSERT INTO budget_plan_revisions(plan_id,version,snapshot) VALUES (?,?,?)',(plan_id,result['version'],json.dumps(result,ensure_ascii=False)))
     return result
@@ -580,6 +615,9 @@ def change_system_currency(system_id: int, body: SystemCurrencyWrite):
             c.execute('UPDATE budget_plans SET currency_code=?,total_minor=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?',
                       (body.currency_code,total,p['id']))
             c.executemany('UPDATE budget_plan_items SET amount_minor=? WHERE id=?', [(amount,item_id) for item_id,amount in items])
+        from app.budget_funding import check_currency_change
+        check_currency_change(c,before['plans'])
+        for p in before['plans']:
             after = plan_data(c,system_id,p['month'],body.currency_code)
             c.execute('INSERT INTO budget_plan_revisions(plan_id,version,snapshot) VALUES (?,?,?)',
                       (p['id'],after['version'],json.dumps(after,ensure_ascii=False)))
@@ -623,6 +661,8 @@ def budget_overview(end_month: str, start_month: str = '0001-01', system_id: int
                         system_name=systems[item['budget_system_id']]['name'],storage_path=storage[item['storage_method_id']]['path'],
                         storage_root=storage_parent['path'],
                         legacy_purpose=purposes[item['purpose_id']]['path'] if not purposes[item['purpose_id']]['is_placeholder'] else '')
+        from app.budget_funding import FundingCatalog
+        funding=FundingCatalog(c)
         for p in plans:
             places=currencies[p['currency_code']]['decimal_places']
             allocated=sum(i['amount_minor'] for i in by_plan[p['id']])
@@ -630,7 +670,7 @@ def budget_overview(end_month: str, start_month: str = '0001-01', system_id: int
             p.update(system_name=systems[p['budget_system_id']]['name'],is_active=systems[p['budget_system_id']]['is_active'],
                      budget_total=money(total,places),allocated=money(allocated,places),unallocated=money(total-allocated,places),
                      budget_total_minor=total,allocated_minor=allocated,unallocated_minor=total-allocated,
-                     total_inferred=p['total_minor'] is None,items=by_plan[p['id']])
+                     total_inferred=p['total_minor'] is None,items=by_plan[p['id']],funding=funding.for_plan(p['id']))
         blocks=[]
         for code in sorted({p['currency_code'] for p in plans}):
             places=currencies[code]['decimal_places']; selected=[p for p in plans if p['currency_code']==code]
@@ -656,9 +696,11 @@ def budget_overview_export(end_month: str, start_month: str = '0001-01', system_
     def safe(value):
         return "'"+value if isinstance(value,str) and value.startswith(('=','+','-','@')) else value
     book=Workbook(); sheet=book.active; sheet.title='预算总额'
-    sheet.append(['月份','用途（预算系统）','币种','总预算','已分配存储','待分配','说明'])
+    sheet.append(['月份','用途（预算系统）','币种','总预算','已分配存储','待分配','说明','收入来源','来源状态'])
     for p in data['plans']:
-        sheet.append([p['month'],safe(p['system_name']),p['currency_code'],Decimal(p['budget_total']),Decimal(p['allocated']),Decimal(p['unallocated']),safe(p['note'])])
+        funding=p['funding']
+        sheet.append([p['month'],safe(p['system_name']),p['currency_code'],Decimal(p['budget_total']),Decimal(p['allocated']),Decimal(p['unallocated']),safe(p['note']),
+                      safe(funding['title']) if funding else '',safe(funding['status']) if funding else '未绑定来源'])
     sheet.freeze_panes='A2'; sheet=book.create_sheet('二级存储分配')
     sheet.append(['月份','用途（预算系统）','币种','存储方式','金额','明细名称','备注','历史用途标签'])
     for i in data['items']:
@@ -678,6 +720,8 @@ def budget_overview_export(end_month: str, start_month: str = '0001-01', system_
             note+='；含邻近日期汇率'
         if row['warnings']:
             note+='；'+'；'.join(sorted({w['reason'] for w in row['warnings']}))
+        if row.get('funding_warnings'):
+            note+='；收入来源存在不足或待处理绑定，余额仍按计划计算'
         sheet.append([row['month'],safe(row['system_name']),row['currency_code'],row['origin_month']]+
                      [Decimal(row[key]) if row[key] is not None else None for key in ('opening','added','available','expense','closing')]+[note])
     sheet.freeze_panes='A2'

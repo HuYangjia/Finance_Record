@@ -55,6 +55,10 @@ def initialize_database() -> None:
     if DATABASE_PATH.exists():
         with sqlite3.connect(DATABASE_PATH) as existing:
             tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if 'budget_plans' in tables and 'budget_plan_funding' not in tables:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-funding-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
             if 'budget_systems' in tables and 'execution_start_month' not in {r[1] for r in existing.execute('PRAGMA table_info(budget_systems)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
                 with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-execution-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:

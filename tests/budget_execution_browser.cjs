@@ -32,7 +32,8 @@ const base='http://127.0.0.1:18110';
     await page.locator('[data-budget-close]').click();await month('2026-11');
     assert.equal(await row().locator('[data-amount=closing]').textContent(),'30.00');
     await month('2026-09');await row().getByRole('button',{name:'编辑计划'}).click();await text('#plan-state','结转验收');
-    await page.fill('.currency-total','200');await page.click('#save-plan');await text('[data-role=version]','已保存版本 2');await idle();
+    await page.fill('.currency-total','200');await page.click('#save-plan');await page.waitForSelector('#plan-editor[open]',{state:'hidden'});await idle();
+    assert.equal((await get('/api/budget/plans/'+system+'/2026-09/HKD')).version,2);
     await month('2026-11');assert.equal(await row().locator('[data-amount=closing]').textContent(),'130.00');
     console.log('PASS negative carry, spending without a plan, history, range independence and historical edits');
 

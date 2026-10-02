@@ -46,6 +46,16 @@ CREATE TABLE IF NOT EXISTS budget_plan_revisions (
     version INTEGER NOT NULL, snapshot TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(plan_id,version)
 );
+CREATE TABLE IF NOT EXISTS budget_plan_funding (
+    plan_id INTEGER PRIMARY KEY REFERENCES budget_plans(id) ON DELETE CASCADE,
+    transaction_id INTEGER REFERENCES transactions(id) ON DELETE RESTRICT,
+    group_id INTEGER REFERENCES transaction_offset_groups(id) ON DELETE RESTRICT,
+    currency_code TEXT NOT NULL REFERENCES currencies(code),
+    CHECK ((transaction_id IS NOT NULL AND group_id IS NULL) OR
+           (transaction_id IS NULL AND group_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS budget_funding_transaction ON budget_plan_funding(transaction_id);
+CREATE INDEX IF NOT EXISTS budget_funding_group ON budget_plan_funding(group_id);
 CREATE TABLE IF NOT EXISTS budget_assignment_rules (
     id INTEGER PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('expense','income')),
     category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
