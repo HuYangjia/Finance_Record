@@ -688,8 +688,10 @@ class FinanceAppSmokeTest(unittest.TestCase):
         self.assertEqual(account_types["transfer"]["raw_totals_by_currency"][0]["inflow_amount"], "0.00")
         self.assertEqual(account_types["transfer"]["raw_totals_by_currency"][0]["outflow_amount"], "30.00")
 
-        unavailable = search_transactions(start_date="2026-09-02")["summary"]
-        self.assertFalse(unavailable["available"])
+        single_boundary = search_transactions(start_date="2026-09-02")["summary"]
+        self.assertTrue(single_boundary["available"])
+        self.assertEqual(single_boundary["raw_totals_by_currency"], summary["raw_totals_by_currency"])
+        self.assertEqual(single_boundary["transaction_count"], 5)
 
     def test_corrections_backup_audit_and_adjustment(self):
         accounts = {account["code"]: account for account in list_accounts()}

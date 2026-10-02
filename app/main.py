@@ -3195,42 +3195,38 @@ def search_transactions(
             """,
             parameters + [limit, offset],
         ).fetchall()
-        summary_rows = []
-        rate_rows = []
-        currency_decimal_places: dict[str, int] = {}
-        if start_date and end_date:
-            summary_rows = connection.execute(
-                f"""
-                SELECT
-                    transactions.id,
-                    transactions.transaction_date,
-                    transactions.transaction_type,
-                    transactions.source_account_id,
-                    transactions.destination_account_id,
-                    transactions.outflow_minor,
-                    transactions.inflow_minor,
-                    source.currency_code AS source_currency_code,
-                    source_currency.decimal_places AS source_decimal_places,
-                    destination.currency_code AS destination_currency_code,
-                    destination_currency.decimal_places AS destination_decimal_places
-                {transaction_query}
-                {where_clause}
-                """,
-                parameters,
+        summary_rows = connection.execute(
+            f"""
+            SELECT
+                transactions.id,
+                transactions.transaction_date,
+                transactions.transaction_type,
+                transactions.source_account_id,
+                transactions.destination_account_id,
+                transactions.outflow_minor,
+                transactions.inflow_minor,
+                source.currency_code AS source_currency_code,
+                source_currency.decimal_places AS source_decimal_places,
+                destination.currency_code AS destination_currency_code,
+                destination_currency.decimal_places AS destination_decimal_places
+            {transaction_query}
+            {where_clause}
+            """,
+            parameters,
+        ).fetchall()
+        rate_rows = connection.execute(
+            """
+            SELECT rate_date, usd_cny_rate, hkd_cny_rate
+            FROM daily_cny_exchange_rates
+            ORDER BY rate_date
+            """
+        ).fetchall()
+        currency_decimal_places = {
+            row["code"]: row["decimal_places"]
+            for row in connection.execute(
+                "SELECT code, decimal_places FROM currencies"
             ).fetchall()
-            rate_rows = connection.execute(
-                """
-                SELECT rate_date, usd_cny_rate, hkd_cny_rate
-                FROM daily_cny_exchange_rates
-                ORDER BY rate_date
-                """
-            ).fetchall()
-            currency_decimal_places = {
-                row["code"]: row["decimal_places"]
-                for row in connection.execute(
-                    "SELECT code, decimal_places FROM currencies"
-                ).fetchall()
-            }
+        }
 
     transactions = [
         {
@@ -3274,19 +3270,12 @@ def search_transactions(
         }
         for row in rows
     ]
-    summary = (
-        build_transaction_search_summary(
-            summary_rows,
-            rate_rows,
-            account_id,
-            transaction_types,
-            currency_decimal_places,
-        )
-        if start_date and end_date
-        else {
-            "available": False,
-            "reason": "请选择完整日期范围后查看金额汇总。",
-        }
+    summary = build_transaction_search_summary(
+        summary_rows,
+        rate_rows,
+        account_id,
+        transaction_types,
+        currency_decimal_places,
     )
     return {
         "filters": {

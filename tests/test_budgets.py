@@ -89,6 +89,35 @@ class BudgetTest(unittest.TestCase):
         with database.connect() as c:
             self.assertEqual(c.execute('SELECT COUNT(*) FROM budget_plans').fetchone()[0],4)
 
+    def test_all_history_and_single_boundary_search_summary_uses_full_filtered_results(self):
+        self.transaction(amount='10',day='2026-09-01')
+        self.transaction(amount='20',day='2026-10-01')
+        self.transaction(kind='income',amount='30',day='2026-10-01')
+        special=self.setting('systems',name='专项查询')['id']
+        self.transaction(amount='40',budget=special,day='2026-11-01')
+        before=self.call('GET','/api/accounts')
+        url=f'/api/transactions/search?budget_system_id={self.daily}&transaction_types=expense&limit=1'
+        first=self.call('GET',url)
+        second=self.call('GET',url+'&offset=1')
+        self.assertEqual(len(first['transactions']),1)
+        self.assertEqual(first['pagination']['total'],2)
+        self.assertEqual(first['summary'],second['summary'])
+        self.assertTrue(first['summary']['available'])
+        self.assertEqual(first['summary']['raw_totals_by_currency'][0]['outflow_amount'],'30.00')
+        for bounds,count,total in [('&start_date=2026-10-01',1,'20.00'),('&end_date=2026-09-30',1,'10.00'),('&start_date=2026-12-01',0,None)]:
+            result=self.call('GET',url+bounds)
+            self.assertTrue(result['summary']['available'])
+            self.assertEqual(result['summary']['transaction_count'],count)
+            self.assertEqual(result['pagination']['total'],count)
+            if total:
+                self.assertEqual(result['summary']['raw_totals_by_currency'][0]['outflow_amount'],total)
+        all_rows=self.call('GET','/api/transactions/search?limit=1')['summary']
+        self.assertEqual(all_rows['transaction_count'],4)
+        self.assertEqual(all_rows['raw_totals_by_currency'][0]['outflow_amount'],'70.00')
+        self.assertEqual(all_rows['raw_totals_by_currency'][0]['inflow_amount'],'30.00')
+        self.call('GET',url+'&start_date=2026-10-31&end_date=2026-10-01',code=422)
+        self.assertEqual(self.call('GET','/api/accounts'),before)
+
     def test_multi_item_cells_revisions_snapshot_and_existing_parent_amount(self):
         oct_plan=self.plan(items=[self.item('300'),self.item('200')])
         self.assertEqual(self.summary()['cells'][0]['amount'],'500.00')

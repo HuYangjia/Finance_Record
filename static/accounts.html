@@ -6,7 +6,7 @@
     <title>个人财务账本 - 账户与流水</title>
     <link rel="icon" href="/static/compass-rose.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/static/styles.css?v=20261001-2">
-    <link rel="stylesheet" href="/static/workspace.css?v=20261001-2">
+    <link rel="stylesheet" href="/static/workspace.css?v=20261002-5">
   </head>
   <body>
     <header class="topbar">
@@ -39,6 +39,7 @@
           <span id="detail-status" role="status"></span>
         </div>
         <form id="detail-filter-form">
+          <div id="detail-date-presets"></div>
           <div class="detail-filter-grid">
             <label>
               <span>账户</span>
@@ -85,7 +86,7 @@
           </div>
           <div class="form-actions detail-filter-actions">
             <button type="submit">筛选</button>
-            <button id="clear-detail-filters" class="secondary-button" type="button">清除筛选</button>
+            <button id="clear-detail-filters" class="secondary-button" type="button">重置筛选</button>
           </div>
         </form>
       </section>
@@ -155,6 +156,7 @@
         <p id="daily-budget-hint" class="subtle-note">未单独指定预算的支出自动计入日常预算，包含历史消费。</p>
         <p id="budget-query-warning" class="empty-notice" role="status" hidden></p>
         <form id="transaction-search-form">
+          <div id="search-date-presets"></div>
           <div class="detail-filter-grid">
             <label class="budget-filter-field"><span>消费自预算 / 预算归属</span><select id="search-budget-system"><option value="">全部预算</option><option value="0">未归属（不含日常支出）</option></select></label>
             <label>
@@ -199,7 +201,7 @@
           </div>
           <div class="form-actions detail-filter-actions">
             <button type="submit">查询</button>
-            <button id="clear-search-filters" class="secondary-button" type="button">清除筛选</button>
+            <button id="clear-search-filters" class="secondary-button" type="button">重置筛选</button>
           </div>
         </form>
       </section>
@@ -438,6 +440,7 @@
 
     <script src="/static/frequent-picker.js?v=20261001-2"></script>
     <script src="/static/offset-ui.js?v=20261001-2"></script>
-    <script src="/static/accounts.js?v=20261001-2"></script>
+    <script src="/static/date-range.js?v=20261002-5"></script>
+    <script src="/static/accounts.js?v=20261002-5"></script>
   </body>
 </html>

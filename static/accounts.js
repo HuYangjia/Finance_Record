@@ -5,6 +5,7 @@ try {
 } catch (_) {}
 const isOffsetBasis = () => Boolean(basisSelect && basisSelect.value !== 'raw');
 let searchRequestId = 0;
+let detailRequestId = 0;
 function updateBasisDescription() {
   const description = document.querySelector('#basis-description');
   if (description) description.textContent = isOffsetBasis()
@@ -103,6 +104,15 @@ const transactionAnalysisPanel = document.querySelector("#transaction-analysis-p
 const analysisStatus = document.querySelector("#analysis-status");
 const analysisConstraint = document.querySelector("#analysis-constraint");
 const analysisContent = document.querySelector("#analysis-content");
+
+const detailDates = window.DateRangeControls.create({
+  host: document.querySelector('#detail-date-presets'), start: detailStartDateInput, end: detailEndDateInput,
+  onApply: () => loadDetail(true).catch(error => setStatus(detailStatus, error.message, 'error')),
+});
+const searchDates = window.DateRangeControls.create({
+  host: document.querySelector('#search-date-presets'), start: searchStartDateInput, end: searchEndDateInput,
+  onApply: () => loadSearch(true).catch(error => setStatus(searchStatus, error.message, 'error')),
+});
 
 const editorDialog = document.querySelector("#transaction-editor-dialog");
 const editorForm = document.querySelector("#transaction-editor-form");
@@ -565,6 +575,8 @@ function updateAccountPagination(pagination) {
 }
 
 async function loadDetail(resetPage = false) {
+  detailDates.sync();
+  const serial = ++detailRequestId;
   if (resetPage) {
     state.detail.offset = 0;
   }
@@ -574,7 +586,10 @@ async function loadDetail(resetPage = false) {
     return;
   }
   setStatus(detailStatus, "");
-  const data = await request(buildDetailPath());
+  let data;
+  try { data = await request(buildDetailPath()); }
+  catch (error) { if (serial === detailRequestId) throw error; else return; }
+  if (serial !== detailRequestId) return;
   renderAccountState(data.account);
   renderAccountLedger(data.transactions, data.account);
   updateAccountPagination(data.pagination);
@@ -712,7 +727,7 @@ function renderTransactionSearchSummary(summary) {
     ? searchAccountSelect.selectedOptions[0]?.textContent || "所选账户"
     : "全部账户";
   transactionSearchSummaryMeta.textContent =
-    `${searchStartDateInput.value} 至 ${searchEndDateInput.value} · ${summary.transaction_count} 笔 · ${scopeLabel}`;
+    `${searchDates.label()} · ${summary.transaction_count} 笔 · ${scopeLabel}`;
 
   if (summary.transaction_count === 0) {
     const notice = document.createElement("div");
@@ -1155,6 +1170,7 @@ async function loadTransactionAnalysis(serial = searchRequestId) {
     renderTransactionAnalysis(data);
     setStatus(analysisStatus, data.budget_warnings?.length ? '按 HKD 统计 · 未包含跨预算待归属事项' : "已按 HKD 统计", "success");
   } catch (error) {
+    if (serial !== searchRequestId) return;
     analysisConstraint.textContent = error.message;
     analysisConstraint.hidden = false;
     setStatus(analysisStatus, "", "");
@@ -1162,6 +1178,7 @@ async function loadTransactionAnalysis(serial = searchRequestId) {
 }
 
 async function loadSearch(resetPage = false, openResults = false) {
+  searchDates.sync();
   if (resetPage) {
     state.search.offset = 0;
   }
@@ -1174,7 +1191,9 @@ async function loadSearch(resetPage = false, openResults = false) {
   if (isOffsetBasis() && (searchAdjustmentOnlyInput.checked || selectedSearchTypes().some(type => !['expense','income'].includes(type)))) {
     throw new Error('冲销后收支只支持收入和支出，请取消转账、换汇、调整等类型及“仅手工调整”后查询。');
   }
-  const data = await request(buildSearchPath());
+  let data;
+  try { data = await request(buildSearchPath()); }
+  catch (error) { if (serial === searchRequestId) throw error; else return; }
   if (serial !== searchRequestId) return;
   renderBudgetWarnings(data);
   document.querySelector('#search-results-body').closest('table').querySelector('thead').hidden = isOffsetBasis();
@@ -1190,7 +1209,7 @@ async function loadSearch(resetPage = false, openResults = false) {
   updateSearchPagination(data.pagination);
   if (isOffsetBasis()) {
     window.OffsetUI.summary(transactionSearchSummaryContent, data.summary);
-    transactionSearchSummaryMeta.textContent = '冲销后收支 · 统计日期归属'+(data.budget_warnings?.length?' · 仅已归属事项':'');
+    transactionSearchSummaryMeta.textContent = `${searchDates.label()} · 冲销后收支 · 统计日期归属`+(data.budget_warnings?.length?' · 仅已归属事项':'');
     document.querySelector('#search-summary').textContent = `共 ${data.pagination.total} 条统计记录`;
   } else renderTransactionSearchSummary(data.summary);
   if (resetPage && !openResults) {
@@ -1490,8 +1509,7 @@ detailAccountSelect.addEventListener("change", () => {
 });
 
 document.querySelector("#clear-detail-filters").addEventListener("click", () => {
-  detailStartDateInput.value = "";
-  detailEndDateInput.value = "";
+  detailDates.reset();
   detailTransactionTypeSelect.value = "";
   detailCategorySelect.value = "";
   detailKeywordInput.value = "";
@@ -1522,8 +1540,7 @@ searchForm.addEventListener("submit", (event) => {
 document.querySelector("#clear-search-filters").addEventListener("click", () => {
   if(searchBudgetSelect)searchBudgetSelect.value='';
   searchAccountSelect.value = "";
-  searchStartDateInput.value = "";
-  searchEndDateInput.value = "";
+  searchDates.reset();
   searchKeywordInput.value = "";
   searchAdjustmentOnlyInput.checked = false;
   searchFlaggedOnlyInput.checked = false;
