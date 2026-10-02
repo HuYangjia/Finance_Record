@@ -165,6 +165,52 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(book['二级存储分配']['F2'].data_type,'s')
         self.assertEqual(book['分币种汇总']['C4'].value,200)
 
+    def test_monthly_multicurrency_save_legacy_ids_and_currency_totals(self):
+        legacy=self.plan(month='2026-09',items=[self.item('600')])
+        url=f'/api/budget/monthly/{self.daily}/2026-09'
+        old=self.call('GET',url)
+        self.assertEqual(old['plans'][0]['items'][0]['id'],legacy['items'][0]['id'])
+        before=self.call('GET','/api/accounts')
+        plans=[dict(currency_code='CNY',expected_version=1,total='1000',items=legacy['items']),
+               dict(currency_code='HKD',expected_version=0,total='2000',items=[dict(storage_method_id=self.storage,amount='1200')])]
+        result=self.call('PUT',url,dict(plans=plans))
+        self.assertEqual([p['currency_code'] for p in result['plans']],['CNY','HKD'])
+        self.assertEqual([p['version'] for p in result['plans']],[2,1])
+        self.assertEqual(result['plans'][0]['items'][0]['purpose_id'],self.purpose)
+        self.assertEqual(self.call('GET',url),result)
+        overview=self.call('GET','/api/budget/overview?end_month=2026-09')
+        self.assertEqual([b['monthly']['unallocated'] for b in overview['currencies']],['400.00','800.00'])
+        self.assertEqual(self.call('GET','/api/accounts'),before)
+        self.assertEqual(self.call('GET','/api/transactions/search')['pagination']['total'],0)
+
+    def test_monthly_failed_currency_rolls_back_entire_plan_and_revisions(self):
+        url=f'/api/budget/monthly/{self.daily}/2026-09'
+        first=dict(currency_code='CNY',expected_version=0,total='1000',items=[])
+        bad=dict(currency_code='JPY',expected_version=0,total='200.1',items=[])
+        self.call('PUT',url,dict(plans=[first,bad]),422)
+        self.assertEqual(self.call('GET',url)['plans'],[])
+        good=dict(currency_code='HKD',expected_version=0,total='500',items=[])
+        self.call('PUT',url,dict(plans=[first,good]))
+        before=self.call('GET',url)
+        for failing in [dict(good,expected_version=0),dict(good,expected_version=1,total='1',allocation_mode=False,items=[dict(storage_method_id=self.storage,amount='2')])]:
+            self.call('PUT',url,dict(plans=[dict(first,expected_version=1,total='9999'),failing]),409 if failing['expected_version']==0 else 422)
+            self.assertEqual(self.call('GET',url),before)
+        with database.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM budget_plan_revisions').fetchone()[0],2)
+
+    def test_monthly_duplicate_omitted_and_concurrently_added_currencies(self):
+        url=f'/api/budget/monthly/{self.daily}/2026-09'
+        first=dict(currency_code='CNY',expected_version=0,total='1000',items=[])
+        self.call('PUT',url,dict(plans=[first,first]),422)
+        self.call('PUT',url,dict(plans=[]),422)
+        self.call('PUT',url,dict(plans=[first]))
+        snapshot=dict(first,expected_version=1,total='1200')
+        self.plan(month='2026-09',currency='HKD',items=[],total='300',allocation_mode=True)
+        self.call('PUT',url,dict(plans=[snapshot]),409)
+        self.assertEqual(self.call('GET',url)['plans'][0]['total'],'1000.00')
+        self.call('PUT',url,dict(plans=[snapshot,dict(currency_code='HKD',expected_version=1,total='300',items=[])]))
+        self.call('GET',f'/api/budget/monthly/{self.daily}/2026-13',code=422)
+
     def test_version_conflict_rolls_back_and_deletion_retains_history(self):
         plan=self.plan()
         body=dict(expected_version=0,items=[self.item('999')])

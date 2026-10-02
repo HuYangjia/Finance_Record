@@ -382,52 +382,103 @@ def get_plan(system_id: int, month: str, code: str):
         return plan_data(c,system_id,month,code)
 
 
+def save_plan_in_connection(c, system_id: int, month: str, code: str, body: PlanWrite):
+    before = plan_data(c,system_id,month,code)
+    require_system(c,system_id)
+    if before['version'] != body.expected_version:
+        raise HTTPException(409, '本月计划已更新，请重新加载后再编辑。')
+    existing = {i['id']:i for i in before['items']}; seen = set()
+    config = config_data(c)
+    for item in body.items:
+        if item.id and (item.id not in existing or item.id in seen):
+            raise HTTPException(422, '预算明细编号重复或不属于本月。')
+        if item.id: seen.add(item.id)
+        if item.purpose_id is None:
+            # New plans use the budget system as purpose. Preserve legacy labels on edits.
+            item.purpose_id = existing[item.id]['purpose_id'] if item.id in existing else next(
+                r['id'] for r in config['purposes'] if r['budget_system_id']==system_id and r['is_placeholder'])
+        for key, field in [('storage','storage_method_id'),('purposes','purpose_id')]:
+            value = getattr(item,field)
+            row = next((r for r in config[key] if r['id']==value and r['budget_system_id']==system_id),None)
+            unchanged = item.id in existing and existing[item.id][field]==value
+            if row is None or (not unchanged and not row['selectable']):
+                raise HTTPException(422, '新明细须选择本预算中启用的末级栏目。')
+    total = minor(body.total,before['decimal_places']) if body.total is not None else None
+    allocated = sum(minor(i.amount,before['decimal_places']) for i in body.items)
+    if body.allocation_mode and (total is None or allocated > total):
+        raise HTTPException(422, '请填写总预算，存储分配合计不能超过总预算。')
+    if allocated>10**15:
+        raise HTTPException(422, '本月预算明细合计超出支持范围。')
+    if before['id']:
+        plan_id = before['id']
+        c.execute('UPDATE budget_plans SET total_minor=?,note=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?', (total,body.note,plan_id))
+    else:
+        plan_id = c.execute('INSERT INTO budget_plans(budget_system_id,month,currency_code,total_minor,note) VALUES (?,?,?,?,?)', (system_id,month,code,total,body.note)).lastrowid
+    for old_id in existing.keys()-seen:
+        c.execute('DELETE FROM budget_plan_items WHERE id=?',(old_id,))
+    for order,item in enumerate(body.items):
+        values = (item.storage_method_id,item.purpose_id,item.title,minor(item.amount,before['decimal_places']),order,item.note)
+        if item.id:
+            c.execute('UPDATE budget_plan_items SET storage_method_id=?,purpose_id=?,title=?,amount_minor=?,sort_order=?,note=? WHERE id=?', (*values,item.id))
+        else:
+            c.execute('INSERT INTO budget_plan_items(storage_method_id,purpose_id,title,amount_minor,sort_order,note,plan_id) VALUES (?,?,?,?,?,?,?)', (*values,plan_id))
+    result = plan_data(c,system_id,month,code)
+    c.execute('INSERT INTO budget_plan_revisions(plan_id,version,snapshot) VALUES (?,?,?)',(plan_id,result['version'],json.dumps(result,ensure_ascii=False)))
+    return result
+
+
 @router.put('/api/budget/plans/{system_id}/{month}/{code}')
 def save_plan(system_id: int, month: str, code: str, body: PlanWrite):
     valid_month(month)
     with mutation() as c:
-        before = plan_data(c,system_id,month,code)
+        return save_plan_in_connection(c,system_id,month,code,body)
+
+
+class CurrencyPlanWrite(PlanWrite):
+    currency_code: str = Field(min_length=1, max_length=12)
+    total: Decimal = Field(ge=0)
+
+
+class MonthlyPlanWrite(BaseModel):
+    plans: list[CurrencyPlanWrite] = Field(min_length=1, max_length=100)
+
+
+def monthly_plan_data(c, system_id, month):
+    valid_month(month)
+    system = require_system(c,system_id,True)
+    codes = [r[0] for r in c.execute(
+        'SELECT currency_code FROM budget_plans WHERE budget_system_id=? AND month=? ORDER BY currency_code',
+        (system_id,month))]
+    return dict(budget_system_id=system_id,system_name=system['name'],month=month,
+                plans=[plan_data(c,system_id,month,code) for code in codes])
+
+
+@router.get('/api/budget/monthly/{system_id}/{month}')
+def get_monthly_plan(system_id: int, month: str):
+    with connect() as c:
+        c.execute('BEGIN')
+        return monthly_plan_data(c,system_id,month)
+
+
+@router.put('/api/budget/monthly/{system_id}/{month}')
+def save_monthly_plan(system_id: int, month: str, body: MonthlyPlanWrite):
+    valid_month(month)
+    codes = [p.currency_code for p in body.plans]
+    if len(codes) != len(set(codes)):
+        raise HTTPException(422, '同一月度预案每个币种只能填写一组金额。')
+    with mutation() as c:
         require_system(c,system_id)
-        if before['version'] != body.expected_version:
-            raise HTTPException(409, '本月计划已更新，请重新加载后再编辑。')
-        existing = {i['id']:i for i in before['items']}; seen = set()
-        config = config_data(c)
-        for item in body.items:
-            if item.id and (item.id not in existing or item.id in seen):
-                raise HTTPException(422, '预算明细编号重复或不属于本月。')
-            if item.id: seen.add(item.id)
-            if item.purpose_id is None:
-                # New plans use the budget system as purpose. Preserve legacy labels on edits.
-                item.purpose_id = existing[item.id]['purpose_id'] if item.id in existing else next(
-                    r['id'] for r in config['purposes'] if r['budget_system_id']==system_id and r['is_placeholder'])
-            for key, field in [('storage','storage_method_id'),('purposes','purpose_id')]:
-                value = getattr(item,field)
-                row = next((r for r in config[key] if r['id']==value and r['budget_system_id']==system_id),None)
-                unchanged = item.id in existing and existing[item.id][field]==value
-                if row is None or (not unchanged and not row['selectable']):
-                    raise HTTPException(422, '新明细须选择本预算中启用的末级栏目。')
-        total = minor(body.total,before['decimal_places']) if body.total is not None else None
-        allocated = sum(minor(i.amount,before['decimal_places']) for i in body.items)
-        if body.allocation_mode and (total is None or allocated > total):
-            raise HTTPException(422, '请填写总预算，存储分配合计不能超过总预算。')
-        if allocated>10**15:
-            raise HTTPException(422, '本月预算明细合计超出支持范围。')
-        if before['id']:
-            plan_id = before['id']
-            c.execute('UPDATE budget_plans SET total_minor=?,note=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?', (total,body.note,plan_id))
-        else:
-            plan_id = c.execute('INSERT INTO budget_plans(budget_system_id,month,currency_code,total_minor,note) VALUES (?,?,?,?,?)', (system_id,month,code,total,body.note)).lastrowid
-        for old_id in existing.keys()-seen:
-            c.execute('DELETE FROM budget_plan_items WHERE id=?',(old_id,))
-        for order,item in enumerate(body.items):
-            values = (item.storage_method_id,item.purpose_id,item.title,minor(item.amount,before['decimal_places']),order,item.note)
-            if item.id:
-                c.execute('UPDATE budget_plan_items SET storage_method_id=?,purpose_id=?,title=?,amount_minor=?,sort_order=?,note=? WHERE id=?', (*values,item.id))
-            else:
-                c.execute('INSERT INTO budget_plan_items(storage_method_id,purpose_id,title,amount_minor,sort_order,note,plan_id) VALUES (?,?,?,?,?,?,?)', (*values,plan_id))
-        result = plan_data(c,system_id,month,code)
-        c.execute('INSERT INTO budget_plan_revisions(plan_id,version,snapshot) VALUES (?,?,?)',(plan_id,result['version'],json.dumps(result,ensure_ascii=False)))
-    return result
+        existing = {r[0] for r in c.execute(
+            'SELECT currency_code FROM budget_plans WHERE budget_system_id=? AND month=?', (system_id,month))}
+        if existing-set(codes):
+            raise HTTPException(409, '这份月度预案还有其他已保存币种，请重新加载完整预案后再保存。')
+        for plan in body.plans:
+            try:
+                save_plan_in_connection(c,system_id,month,plan.currency_code,
+                                        plan.model_copy(update={'allocation_mode':True}))
+            except HTTPException as exc:
+                raise HTTPException(exc.status_code, f'{plan.currency_code}：{exc.detail}') from exc
+        return monthly_plan_data(c,system_id,month)
 
 
 @router.get('/api/budget/overview')

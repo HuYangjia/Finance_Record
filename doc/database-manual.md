@@ -134,6 +134,7 @@ SELECT id, kind, name FROM categories ORDER BY kind, sort_order, id;
 
 - `budget_systems` 保存预算用途名称和启用状态；`budget_storage_methods` 保存存储层级，`budget_purposes` 保留旧用途标签，新分配不要求选择此标签。
 - `budget_plans` 按系统、月份、币种唯一，`total_minor` 保存总预算；`budget_plan_items` 保存其存储分配，`budget_plan_revisions` 保存历史快照。累计总预算只加每份计划的当前总额，分配在总额内拆分，不重复相加。旧总额为 NULL 时查询暂按明细合计，不回填旧记录。
+- 页面把同系统、同月的这些记录组成一份多币种预案，不新建重复父表。通过月度批量接口在一个事务内保存全部币种，失败全部回滚；每币种历史版本和原明细 ID 保持独立关联。
 - `budget_assignment_rules`、`budget_entry_presets` 保存精确分类映射和命名预设。`app_settings` 保存分别适用于支出、入账的默认预算 ID，以及设置版本。
 - `transactions.budget_system_id` 是可空的单独标记。NULL 支出在查询时按 `app_settings.daily_expense_budget_system_id` 计入日常，NULL 收入保持未归属；接口用 `effective_budget_system_id/name` 和 `budget_inherited` 区分有效归属与原始标记。此字段不决定真实支付账户，不自动扣减计划；转账、换汇、调整不使用日常归属。
 - 原 `monthly_budgets` 保留原有含义和导出逻辑；第六页导出使用独立的“预算总额”“二级存储分配”“分币种汇总”。旧导出接口仍兼容。

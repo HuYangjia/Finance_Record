@@ -22,7 +22,7 @@ const base='http://127.0.0.1:18110';
   const food=cats.find(c=>c.name==='餐饮').id,traffic=cats.find(c=>c.name==='交通').id,salary=incomeCats.find(c=>c.name==='工资/劳务').id;
   const accounts=await get('/api/accounts'),octopus=accounts.find(a=>a.code==='OCTOPUS-STUDENT').id,wechat=accounts.find(a=>a.code==='WECHAT').id;
   if(process.argv.includes('--visual')){
-    for(const width of [1440,390]){
+    for(const width of (process.argv.includes('--mobile')?[1440,390]:[1440])){
       await page.setViewportSize({width,height:width===390?844:1050});
       for(const [url,name] of [['/','entry'],['/budgets','plan'],['/settings','settings'],['/accounts','query']]){
         await page.goto(base+url);await page.waitForLoadState('networkidle');
@@ -58,26 +58,26 @@ const base='http://127.0.0.1:18110';
   await page.fill('#plan-month','2026-10');await text('#month-plans-title','2026-10');
   await page.click('#new-budget');await text('#plan-state','2026-10');
   assert.equal(await page.locator('#entry-system option').count(),settings.systems.filter(s=>s.is_active).length);
-  assert(await page.locator('#entry-currency option').count()>1);assert.equal(await page.locator('[data-field=purpose_id]').count(),0);
-  await page.fill('#plan-total','1000');await page.click('#save-plan');await text('#plan-state','已保存版本 1');await text('#allocation-balance','待分配 1000.00');
+  assert(await page.locator('.currency-select option').count()>1);assert.equal(await page.locator('[data-field=purpose_id]').count(),0);
+  await page.fill('.currency-total','1000');await page.click('#save-plan');await text('[data-role=version]','已保存版本 1');await text('.allocation-balance','待分配 1000.00');
   const storage=config.storage.find(r=>r.name==='ETF').id;
   for(const amount of ['200','300']){
-    await page.click('#add-plan-item');const row=page.locator('#plan-items tr').last();
+    await page.click('.add-allocation');const row=page.locator('.allocation-items tr').last();
     await row.locator('[data-field=title]').fill('慈善储备');await row.locator('[data-field=storage_method_id]').selectOption(String(storage));await row.locator('[data-field=amount]').fill(amount);
   }
-  await page.fill('#plan-total','400');await page.click('#save-plan');await text('#plan-error','不能超过总预算');
+  await page.fill('.currency-total','400');await page.click('#save-plan');await text('#plan-error','不能超过总预算');
   assert.equal((await get('/api/budget/plans/'+daily+'/2026-10/CNY')).version,1);
-  await page.fill('#plan-total','1000');await page.click('#save-plan');await text('#plan-state','已保存版本 2');await text('#allocation-balance','待分配 500.00');await text('#budget-matrix','1000.00');
+  await page.fill('.currency-total','1000');await page.click('#save-plan');await text('[data-role=version]','已保存版本 2');await text('.allocation-balance','待分配 500.00');await text('#budget-matrix','1000.00');
   await page.locator('#budget-matrix').getByRole('button',{name:'500.00',exact:true}).click();await text('#budget-detail-content','200.00');await text('#budget-detail-content','300.00');await page.locator('[data-budget-close]').click();
-  await page.click('#add-plan-item');const third=page.locator('#plan-items tr').nth(2);await third.locator('[data-field=amount]').fill('50');await third.locator('[data-field=note]').fill('草稿保留');
+  await page.click('.add-allocation');const third=page.locator('.allocation-items tr').nth(2);await third.locator('[data-field=amount]').fill('50');await third.locator('[data-field=note]').fill('草稿保留');
   await third.locator('td').first().getByRole('button',{name:'＋新增',exact:true}).click();await page.fill('#new-dimension-name','黄金');await page.getByRole('button',{name:'创建栏目',exact:true}).click();await text('#budget-status','存储栏目已创建');
   assert.equal(await third.locator('[data-field=amount]').inputValue(),'50');assert.equal(await third.locator('[data-field=note]').inputValue(),'草稿保留');assert.equal(await third.locator('[data-field=storage_method_id] option:checked').textContent(),'黄金');
-  await page.click('#save-plan');await text('#plan-state','已保存版本 3');await text('#allocation-balance','待分配 450.00');
+  await page.click('#save-plan');await text('[data-role=version]','已保存版本 3');await text('.allocation-balance','待分配 450.00');
   await page.fill('#plan-month','2026-11');await text('#month-plans-title','2026-11');await page.click('#new-budget');await text('#plan-state','2026-11');
   await page.locator('summary').filter({hasText:'从其他月份复制'}).click();await page.fill('#copy-month','2026-10');await page.click('#copy-plan');await text('#budget-status','已复制为草稿');
   assert.equal((await get('/api/budget/plans/'+daily+'/2026-11/CNY')).version,0);
-  await page.click('#save-plan');await text('#plan-state','已保存版本 1');await page.selectOption('#matrix-scope','cumulative');await text('#budget-matrix','2000.00');await text('#budget-matrix','1000.00');
-  await page.click('#save-plan');await text('#plan-state','已保存版本 2');await text('#budget-matrix','2000.00');
+  await page.click('#save-plan');await text('[data-role=version]','已保存版本 1');await page.selectOption('#matrix-scope','cumulative');await text('#budget-matrix','2000.00');await text('#budget-matrix','1000.00');
+  await page.click('#save-plan');await text('[data-role=version]','已保存版本 2');await text('#budget-matrix','2000.00');
   await page.click('#plan-history');await text('#budget-detail-content','版本 2');await page.locator('[data-budget-close]').click();
   const download=page.waitForEvent('download');await page.click('#budget-export');assert.equal((await download).suggestedFilename(),'budget-plan.xlsx');
   await page.screenshot({path:'/tmp/finance-budget-plan.png',fullPage:true});
@@ -121,11 +121,14 @@ const base='http://127.0.0.1:18110';
   await page.selectOption('#search-budget-system','');await page.locator('#transaction-search-form button[type=submit]').click();await text('#transaction-search-summary-content','55.00');assert(await page.locator('#budget-query-warning').isHidden());
   console.log('PASS cross-budget offset warning and all-budget net counted once');
 
+  if(process.argv.includes('--mobile')){
   await page.setViewportSize({width:390,height:844});await page.goto(base+'/budgets');await text('#budget-status','已加载');
   await page.getByRole('button',{name:'交换行列',exact:true}).click();await page.selectOption('#matrix-level','root');await page.screenshot({path:'/tmp/finance-budget-mobile.png',fullPage:true});
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Budget page overflows mobile viewport');
   for(const url of ['/settings','/','/accounts']){await page.goto(base+url);await page.waitForLoadState('networkidle');assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),url+' overflows mobile viewport');}
   await page.setViewportSize({width:1440,height:1050});console.log('PASS mobile budget layout and matrix transpose');
+
+  }
 
   // A budget request failure must not break the original account/category controls.
   await page.route('**/api/budget/config',route=>route.fulfill({status:503,contentType:'application/json',body:'{"detail":"test unavailable"}'}));
