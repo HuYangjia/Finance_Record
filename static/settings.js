@@ -48,7 +48,7 @@
   async function open(key,row=null){
     editCollection=key;editing=row;$('setting-form').reset();
     const dimension=['storage','purposes'].includes(key);
-    const fields=new Set(key==='systems'?['name','currency','order','note']:key==='storage'?['name','parent','order','note']:dimension?['name','system','parent','order','note']:key==='rules'?['system','mode','category']:['name','system','mode','category','account']);
+    const fields=new Set(key==='systems'?['name','currency','execution-start','opening','order','note']:key==='storage'?['name','parent','order','note']:dimension?['name','system','parent','order','note']:key==='rules'?['system','mode','category']:['name','system','mode','category','account']);
     document.querySelectorAll('[data-setting]').forEach(e=>{e.hidden=!fields.has(e.dataset.setting);for(const i of e.querySelectorAll('input,select'))i.disabled=e.hidden;});
     options($('setting-system'),config.systems.filter(s=>s.is_active||s.id===row?.budget_system_id),null,row?.budget_system_id||$('settings-system').value||config.systems[0]?.id);
     if(dimension&&row)$('setting-system').disabled=true;
@@ -56,6 +56,8 @@
     $('setting-name').value=row?.name||'';$('setting-note').value=row?.note||'';$('setting-order').value=row?.sort_order||0;
     options($('setting-currency'),config.currencies.filter(c=>c.is_active||c.code===row?.currency_code),'首次编制时选择',row?.currency_code);
     $('setting-currency').disabled=key!=='systems'||Boolean(row?.plan_currencies?.length);
+    $('setting-execution-start').value=row?.execution_start_month||'';$('setting-opening').value=row?.opening_balance||'0';
+    $('setting-opening').step=String(10**-(config.currencies.find(c=>c.code===$('setting-currency').value)?.decimal_places??2));
     $('setting-mode').value=row?.mode||'expense';$('setting-active').value=row?.is_active===0?'0':'1';
     refreshCategory(row?.category_id);if(dimension)refreshParent(row?.parent_id);
     options($('setting-account'),accounts,'不预填账户',row?.account_id);
@@ -68,11 +70,13 @@
   $('cancel-setting').onclick=()=>{$('setting-editor').hidden=true;};
   $('settings-collection').onchange=()=>{$('setting-editor').hidden=true;render();};$('settings-system').onchange=render;
   $('setting-system').onchange=()=>{if(['storage','purposes'].includes(editCollection))refreshParent();};$('setting-mode').onchange=()=>refreshCategory();
+  $('setting-currency').onchange=()=>{$('setting-opening').step=String(10**-(config.currencies.find(c=>c.code===$('setting-currency').value)?.decimal_places??2));};
   $('setting-form').onsubmit=e=>{e.preventDefault();act(async()=>{
     const key=editCollection, body={expected_version:config.version,is_active:$('setting-active').value==='1'};
     if(key!=='rules')body.name=$('setting-name').value;
     if(!['systems','storage'].includes(key))body.budget_system_id=Number($('setting-system').value);
     if(key==='systems'&&!$('setting-currency').disabled)body.currency_code=$('setting-currency').value||null;
+    if(key==='systems'){body.execution_start_month=$('setting-execution-start').value||null;body.opening_balance=$('setting-opening').value||'0';}
     if(['systems','storage','purposes'].includes(key)){body.sort_order=Number($('setting-order').value);body.note=$('setting-note').value;}
     if(['storage','purposes'].includes(key))body.parent_id=Number($('setting-parent').value)||null;
     if(['rules','presets'].includes(key)){body.mode=$('setting-mode').value;body.category_id=Number($('setting-category').value)||null;}

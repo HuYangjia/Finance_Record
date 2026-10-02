@@ -65,6 +65,11 @@ main { padding-top: 28px; }
 .app-dialog { border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 22px 85px #142e3038; }
 .app-dialog::backdrop { background: #17363365; backdrop-filter: blur(3px); }
 .budget-dialog > form { display: grid; gap: 18px; }
+#budget-execution th, #budget-execution td { vertical-align: top; }
+#budget-execution [data-amount], .budget-dialog [data-amount] { white-space: nowrap; font-variant-numeric: tabular-nums; }
+#budget-execution .is-negative, .budget-dialog .is-negative { color: #a13a48; font-weight: 650; }
+#budget-execution td:last-child { display: grid; gap: 6px; min-width: 100px; }
+#budget-execution small { display: block; margin-top: 5px; color: #6e8279; }
 .budget-dialog h2 { font-size: 19px; }
 .budget-dialog p { line-height: 1.9; }
 .budget-dialog details { padding: 14px; background: #f5f8f5; margin: 10px 0; border-radius: 8px; }

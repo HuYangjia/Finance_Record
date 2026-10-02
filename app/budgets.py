@@ -86,6 +86,7 @@ def config_data(c):
         codes = [r[0] for r in c.execute('SELECT DISTINCT currency_code FROM budget_plans WHERE budget_system_id=? ORDER BY currency_code', (system['id'],))]
         system['plan_currencies'] = codes
         system['currency_conflict'] = len(codes)>1 or bool(codes and system['currency_code'] and codes != [system['currency_code']])
+        system['opening_balance'] = money(system['opening_minor'],currency(c,system['currency_code']) if system['currency_code'] else 2)
     for key in ('storage', 'purposes'):
         paths(data[key])
     settings = {r['key']: r['value'] for r in c.execute('SELECT * FROM app_settings')}
@@ -128,6 +129,8 @@ class ConfigWrite(BaseModel):
     category_id: int | None = Field(default=None, gt=0)
     account_id: int | None = Field(default=None, gt=0)
     currency_code: str | None = Field(default=None, min_length=1, max_length=12)
+    execution_start_month: str | None = None
+    opening_balance: Decimal | None = None
 
 
 class DefaultsWrite(BaseModel):
@@ -237,6 +240,20 @@ def save_config_item(collection, item_id, body):
                 if old and old['currency_code'] != body.currency_code and c.execute('SELECT 1 FROM budget_plans WHERE budget_system_id=?', (item_id,)).fetchone():
                     raise HTTPException(409, '已有月度计划，请使用“修改预算币种”预览并统一更正。')
                 values['currency_code'] = body.currency_code
+            if {'execution_start_month','opening_balance','currency_code'} & body.model_fields_set:
+                code = values.get('currency_code',old['currency_code'] if old else None)
+                start = body.execution_start_month if 'execution_start_month' in body.model_fields_set else (old['execution_start_month'] if old else None)
+                if start:
+                    valid_month(start)
+                opening = body.opening_balance
+                if opening is None:
+                    old_places = currency(c,old['currency_code']) if old and old['currency_code'] else 2
+                    opening = Decimal(old['opening_minor'] if old else 0)/10**old_places
+                if (start or opening) and not code:
+                    raise HTTPException(422, '设置执行起点或期初结余前，请先选择预算币种。')
+                if opening and not start:
+                    raise HTTPException(422, '有期初结余时，请同时指定起算月份。')
+                values.update(execution_start_month=start,opening_minor=signed_minor(opening,currency(c,code) if code else 2))
             if old and not body.is_active:
                 config = config_data(c)
                 if item_id == config['daily_expense'] or item_id in config['defaults'].values() or any(r['budget_system_id']==item_id and r['is_active'] for key in ('rules','presets') for r in config[key]):
@@ -356,6 +373,10 @@ def minor(value, places):
 
 def money(value, places):
     return f'{Decimal(value) / 10**places:.{places}f}'
+
+
+def signed_minor(value, places):
+    return minor(abs(value),places) * (-1 if value<0 else 1)
 
 
 class PlanItem(BaseModel):
@@ -513,7 +534,8 @@ class SystemCurrencyWrite(BaseModel):
 
 
 def system_currency_data(c, system_id):
-    system = require_system(c,system_id,True)
+    require_system(c,system_id,True)
+    system = next(s for s in config_data(c)['systems'] if s['id']==system_id)
     plans = [plan_data(c,system_id,r['month'],r['currency_code']) for r in c.execute(
         'SELECT month,currency_code FROM budget_plans WHERE budget_system_id=? ORDER BY month,currency_code', (system_id,))]
     return dict(system=system,expected_version=config_data(c)['version'],plans=plans)
@@ -550,7 +572,8 @@ def change_system_currency(system_id: int, body: SystemCurrencyWrite):
                 amounts.append((total,items))
             except HTTPException as exc:
                 raise HTTPException(422, f"{p['month']} 的金额不符合 {body.currency_code} 精度或范围，请先修改该月金额。") from exc
-        c.execute('UPDATE budget_systems SET currency_code=? WHERE id=?', (body.currency_code,system_id))
+        opening = signed_minor(Decimal(before['system']['opening_balance']),places)
+        c.execute('UPDATE budget_systems SET currency_code=?,opening_minor=? WHERE id=?', (body.currency_code,opening,system_id))
         for p,(total,items) in zip(before['plans'],amounts):
             c.execute('INSERT OR IGNORE INTO budget_plan_revisions(plan_id,version,snapshot) VALUES (?,?,?)',
                       (p['id'],p['version'],json.dumps(p,ensure_ascii=False)))
@@ -614,7 +637,17 @@ def budget_overview(end_month: str, start_month: str = '0001-01', system_id: int
             def sums(rows):
                 return {key:money(sum(p[key+'_minor'] for p in rows),places) for key in ('budget_total','allocated','unallocated')}
             blocks.append(dict(currency_code=code,decimal_places=places,monthly=sums([p for p in selected if p['month']==end_month]),cumulative=sums(selected)))
-        return dict(start_month=start_month,end_month=end_month,plans=plans,currencies=blocks,items=items)
+        from app.budget_execution import execution_report
+        execution=execution_report(c,end_month,system_id=system_id,currency_code=currency_code)
+        return dict(start_month=start_month,end_month=end_month,plans=plans,currencies=blocks,items=items,execution=execution)
+
+
+@router.get('/api/budget/execution')
+def budget_execution(end_month: str, start_month: str | None = None, system_id: int | None = None, currency_code: str | None = None):
+    from app.budget_execution import execution_report
+    with connect() as c:
+        c.execute('BEGIN')
+        return execution_report(c,end_month,start_month,system_id,currency_code)
 
 
 @router.get('/api/budget/overview.xlsx')
@@ -635,6 +668,19 @@ def budget_overview_export(end_month: str, start_month: str = '0001-01', system_
     for block in data['currencies']:
         for scope,label in [('monthly',end_month),('cumulative',f'{start_month} 至 {end_month}')]:
             sheet.append([block['currency_code'],label]+[Decimal(block[scope][key]) for key in ('budget_total','allocated','unallocated')])
+    sheet=book.create_sheet('预算执行')
+    sheet.append(['月份','预算','币种','起算月份','上月结余','本月新增','本月可用','净支出','结转余额','说明'])
+    for row in data['execution']['rows']:
+        note=row['reason'] or ('完整计算' if row['complete'] else '结余未完整计算')
+        if not row['compiled']:
+            note+='；当月未编制'
+        if row.get('nearest_count') or row.get('prior_nearest_count'):
+            note+='；含邻近日期汇率'
+        if row['warnings']:
+            note+='；'+'；'.join(sorted({w['reason'] for w in row['warnings']}))
+        sheet.append([row['month'],safe(row['system_name']),row['currency_code'],row['origin_month']]+
+                     [Decimal(row[key]) if row[key] is not None else None for key in ('opening','added','available','expense','closing')]+[note])
+    sheet.freeze_panes='A2'
     out=BytesIO(); book.save(out); out.seek(0)
     return StreamingResponse(out,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename="budget-plan.xlsx"'})
 

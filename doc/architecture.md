@@ -201,6 +201,8 @@ Excel 导出至少包含：月度总览、账户余额、交易流水、月度�
 
 存储方式现为公共目录：`budget_storage_methods` 不再拥有预算系统外键，`budget_storage_aliases` 保留旧 ID 到公共项的映射。`app/budget_migrations.py` 在备份后以事务重建目录、映射当前明细引用，保留明细 ID、金额与旧版本快照；新增 ID 不复用旧别名。用途历史标签仍按预算保留，旧栏目复制接口只复制这些标签。所有预算使用同一存储树，名称唯一约束按公共父项计算。
 
+`app/budget_execution.py` 是只读执行投影，复用完整冲销事项，将各预算每月净支出按预算币种计算，并连续承接正负结余；不创建结转流水，也不改写计划。`budget_systems.execution_start_month/opening_minor` 保存可选起算月及有符号期初，迁移前备份 `finance-pre-budget-execution-*.db`。默认最早相关计划或支出月起算，缺汇率或主方向跨预算时完整性状态继续传到下月。`/api/budget/overview` 同快照返回所选月执行表，`/api/budget/execution` 支持按区间显示历史，始终计算显示区间以前的结余，Excel 同步执行结果。
+
 第六页 `/budgets` 已实现，详细设计见 [budget-and-fund-allocation-design.md](budget-and-fund-allocation-design.md)。预算系统直接作为用途，按系统、月份、币种先录总预算，再填写二级存储分配。总预算独立于分配合计，允许保留待分配金额，禁止新模式超额分配。总表按“预算系统 × 存储方式”展示，各币种分别统计。计划金额不由实际收支或估值自动改变，保留现有 `monthly_budgets`。
 
 实际流水新增可空的预算归属，第三页可按日常、专项等预算筛选。默认预算、分类映射、命名工资预设和栏目管理放入独立 `/settings`；首页支出、入账、转账采用独立表单与草稿。详细规则见 [budget-attribution-and-settings-design.md](budget-attribution-and-settings-design.md)。预算筛选影响查询明细、汇总和图表，不改变原始余额和收支算法。

@@ -27,7 +27,7 @@ window.BudgetCurrency = (() => {
     snapshot=await request(`/api/budget/systems/${system}/currency`);onSaved=callback;
     if(new Set(snapshot.plans.map(p=>p.currency_code)).size>1)throw new Error('此预算存在旧版多币种计划，原记录已保留。请先确认各笔金额的整理方式，不能直接合并更正。');
     title.textContent=`${snapshot.system.name} · 修改预算币种`;
-    note.textContent=`将统一更正此预算的全部 ${snapshot.plans.length} 个月计划。总额和每笔存储分配的数字保持不变，不按汇率换算；之后可逐月修改金额。历史版本保留原币种，真实流水不变。`;
+    note.textContent=`将统一更正此预算的全部 ${snapshot.plans.length} 个月计划。总额、每笔存储分配及期初结余 ${snapshot.system.opening_balance} 的数字保持不变，不按汇率换算；之后可逐月修改金额。消费将按新币种重新比较，历史版本保留原币种，真实流水不变。`;
     options(select,config.currencies.filter(c=>c.is_active||c.code===snapshot.system.currency_code),null,selected||snapshot.system.currency_code||'CNY');
     error.textContent='';render();dialog.showModal();
   }

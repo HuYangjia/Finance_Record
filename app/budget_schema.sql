@@ -3,7 +3,9 @@ CREATE TABLE IF NOT EXISTS budget_systems (
     sort_order INTEGER NOT NULL DEFAULT 0,
     is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
     note TEXT NOT NULL DEFAULT '',
-    currency_code TEXT REFERENCES currencies(code)
+    currency_code TEXT REFERENCES currencies(code),
+    execution_start_month TEXT,
+    opening_minor INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS budget_storage_methods (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

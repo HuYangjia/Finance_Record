@@ -52,6 +52,8 @@
     <form id="setting-form"><div class="form-grid">
       <label data-setting="name">名称<input id="setting-name" maxlength="120" placeholder="例如：专项预算、教育助学"></label>
       <label data-setting="currency">预算币种<select id="setting-currency"></select><small>所有月份沿用此币种。已有计划请使用列表中的“修改币种”。</small></label>
+      <label data-setting="execution-start">执行起算月（可选）<input id="setting-execution-start" type="month" min="0001-01" max="9999-12"><small>留空从本预算最早计划或支出起算。</small></label>
+      <label data-setting="opening">期初预算结余<input id="setting-opening" type="number" step="0.01" value="0"><small>可为负数。有期初结余时须指定币种和起算月。</small></label>
       <label data-setting="system">预算系统<select id="setting-system"></select></label>
       <label data-setting="parent">父栏目<select id="setting-parent"></select></label>
       <label data-setting="order">显示顺序<input id="setting-order" type="number" step="1" value="0"></label>
@@ -63,5 +65,5 @@
     </div><div class="form-actions"><button type="button" id="cancel-setting" class="secondary-button">取消</button><button type="submit">保存设置</button></div></form>
   </section>
 </main>
-<script src="/static/budget-ui.js?v=20261001-2"></script><script src="/static/budget-currency.js?v=20261002-2"></script><script src="/static/settings.js?v=20261002-3"></script>
+<script src="/static/budget-ui.js?v=20261001-2"></script><script src="/static/budget-currency.js?v=20261002-4"></script><script src="/static/settings.js?v=20261002-4"></script>
 </body></html>

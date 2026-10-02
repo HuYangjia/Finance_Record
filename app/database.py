@@ -55,6 +55,10 @@ def initialize_database() -> None:
     if DATABASE_PATH.exists():
         with sqlite3.connect(DATABASE_PATH) as existing:
             tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if 'budget_systems' in tables and 'execution_start_month' not in {r[1] for r in existing.execute('PRAGMA table_info(budget_systems)')}:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-execution-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
             if 'budget_storage_methods' in tables and 'budget_system_id' in {r[1] for r in existing.execute('PRAGMA table_info(budget_storage_methods)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
                 with sqlite3.connect(BACKUP_DIR / f"finance-pre-shared-storage-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
@@ -82,6 +86,10 @@ def initialize_database() -> None:
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         from app.budget_migrations import migrate_shared_storage
         migrate_shared_storage(connection)
+        if 'execution_start_month' not in {r['name'] for r in connection.execute('PRAGMA table_info(budget_systems)')}:
+            connection.execute('ALTER TABLE budget_systems ADD COLUMN execution_start_month TEXT')
+            connection.execute('ALTER TABLE budget_systems ADD COLUMN opening_minor INTEGER NOT NULL DEFAULT 0')
+            connection.execute("UPDATE app_settings SET value=CAST(value AS INTEGER)+1 WHERE key='budget_config_version'")
         if 'currency_code' not in {r['name'] for r in connection.execute('PRAGMA table_info(budget_systems)')}:
             connection.execute('ALTER TABLE budget_systems ADD COLUMN currency_code TEXT REFERENCES currencies(code)')
             connection.execute('''UPDATE budget_systems SET currency_code=(

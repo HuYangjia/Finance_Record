@@ -44,7 +44,36 @@
       const table=node('table'),head=node('thead'),tr=node('tr');for(const title of ['用途（预算系统）','总预算','已分配存储','待分配','操作'])tr.append(node('th',title));head.append(tr);table.append(head);const body=node('tbody');
       for(const id of new Set(rows.map(p=>p.budget_system_id))){const list=rows.filter(p=>p.budget_system_id===id),p=list[0],tr=node('tr');tr.dataset.systemId=id;tr.append(node('td',p.system_name));for(const field of ['budget_total','allocated','unallocated']){const td=node('td');for(const row of list)td.append(node('div',`${row[field]} ${row.currency_code}`,'currency-line'));tr.append(td);}const td=node('td');td.append(button(p.is_active?'编辑整份预案':'查看整份预案',()=>action(()=>openEditor({system:id,month:p.month}))));tr.append(td);body.append(tr);}table.append(body);host.append(table);
     }
-    renderMatrix();
+    renderMatrix();renderExecution();
+  }
+  function executionTable(rows,history=false){
+    const table=node('table'),head=node('thead'),tr=node('tr');
+    for(const title of [history?'月份':'预算','币种','上月结余','本月新增','本月可用','净支出','结转余额','状态',...(history?[]:['操作'])])tr.append(node('th',title));
+    head.append(tr);table.append(head);const body=node('tbody');
+    for(const row of rows){
+      const tr=node('tr');tr.dataset.systemId=row.budget_system_id;tr.dataset.month=row.month;
+      tr.append(node('th',history?row.month:row.system_name),node('td',row.currency_code||'未设置'));
+      for(const key of ['opening','added','available','expense','closing']){const td=node('td',row[key]??(row.started?'未完整':'—'));td.dataset.amount=key;if(row[key]?.startsWith('-'))td.classList.add('is-negative');tr.append(td);}
+      const state=node('td');state.append(node('div',row.reason||(!row.complete?'结余未完整计算':row.compiled?'已编制':'未编制 · 新增按零')));
+      if(row.started)state.append(node('small',`起算 ${row.origin_month}`));
+      if(row.nearest_count||row.prior_nearest_count)state.append(node('div','含邻近日期汇率','subtle-note'));
+      for(const warning of row.warnings){const text=`${warning.month} · ${warning.title}：${warning.reason}`;if(warning.entry_type==='offset_group'){const link=node('a',text);link.href=`/offsets?group=${warning.entry_id}`;state.append(link);}else state.append(node('div',text));}
+      tr.append(state);
+      if(!history){const actions=node('td');actions.append(button('结转历史',()=>action(()=>showExecutionHistory(row))),button(row.compiled?'编辑计划':'编制计划',()=>action(()=>openEditor({system:row.budget_system_id,month:row.month}))));tr.append(actions);}
+      body.append(tr);
+    }
+    table.append(body);return table;
+  }
+  function renderExecution(){
+    const host=$('budget-execution');host.replaceChildren();const rows=overview.execution?.rows||[];
+    if(rows.length)host.append(executionTable(rows));else host.append(node('p','所选范围暂无预算系统。','plan-empty'));
+  }
+  async function showExecutionHistory(row){
+    const [year,month]=row.month.split('-').map(Number),index=Math.max(12,year*12+month-1-11),start=`${String(Math.floor(index/12)).padStart(4,'0')}-${String(index%12+1).padStart(2,'0')}`;
+    const data=await request(`/api/budget/execution?system_id=${row.budget_system_id}&start_month=${start}&end_month=${row.month}`);
+    $('budget-detail-title').textContent=`${row.system_name} · 结转历史`;
+    const host=$('budget-detail-content');host.replaceChildren(node('p','显示截至所选月的最近 12 个月。更早结余自动承接；修改历史计划、流水或汇率后重新计算。','subtle-note'));
+    const wrap=node('div','','table-wrap');wrap.append(executionTable(data.rows,true));host.append(wrap);$('budget-detail-dialog').showModal();
   }
   function showDetails(title,plans,items){
     $('budget-detail-title').textContent=title;const host=$('budget-detail-content');host.replaceChildren();

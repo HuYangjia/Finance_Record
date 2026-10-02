@@ -399,6 +399,97 @@ class BudgetTest(unittest.TestCase):
         with database.connect() as c:
             self.assertEqual(c.execute('PRAGMA foreign_key_check').fetchall(),[])
 
+    def execution(self, start='2026-09', end='2026-11', system=None):
+        return self.call('GET',f'/api/budget/execution?system_id={system or self.daily}&start_month={start}&end_month={end}')['rows']
+
+    def test_execution_negative_carry_missing_plan_and_historical_recalculation(self):
+        sep=self.plan(month='2026-09',total='100',items=[])
+        self.plan(month='2026-11',total='100',items=[])
+        self.transaction(amount='150',day='2026-09-12')
+        self.transaction(amount='20',day='2026-10-01')
+        before=self.call('GET','/api/accounts')
+        rows=self.execution()
+        self.assertEqual([r['closing'] for r in rows],['-50.00','-70.00','30.00'])
+        self.assertEqual(rows[1]['opening'],'-50.00');self.assertFalse(rows[1]['compiled'])
+        self.assertEqual(self.execution(start='2026-11')[0]['opening'],'-70.00')
+        filtered=self.call('GET','/api/budget/overview?start_month=2026-11&end_month=2026-11')
+        self.assertEqual(filtered['execution']['rows'][0]['closing'],'30.00')
+        self.plan(month='2026-09',version=sep['version'],total='200',items=[])
+        self.assertEqual(self.execution()[-1]['closing'],'130.00')
+        self.assertEqual(self.call('GET','/api/accounts'),before)
+        book=load_workbook(BytesIO(self.client.get('/api/budget/overview.xlsx?end_month=2026-11').content))
+        self.assertEqual(book['预算执行']['I2'].value,130)
+
+    def test_execution_complete_offsets_refunds_income_and_currency(self):
+        self.setting('systems',self.daily,name='日常预算',currency_code='CNY')
+        expense=self.transaction(amount='100',day='2026-09-15')
+        refund=self.transaction('income','150',day='2026-11-01')
+        self.call('POST','/api/offset-groups',dict(title='跨月多退',kind='expense',transaction_ids=[expense['id'],refund['id']]),201)
+        self.plan(total='100',items=[])
+        self.transaction('income','999',budget=self.daily,day='2026-11-02')
+        rows=self.execution()
+        self.assertEqual(rows[0]['expense'],'-50.00')
+        self.assertFalse(rows[0]['compiled'])
+        self.assertEqual([r['closing'] for r in rows],['50.00','150.00','150.00'])
+        self.assertGreater(rows[0]['nearest_count'],0)
+
+    def test_execution_missing_rates_and_mixed_budgets_remain_incomplete(self):
+        self.plan(month='2026-09',items=[],total='100')
+        a=self.transaction(amount='20',day='2026-09-01')
+        with database.connect() as c:
+            c.execute('DELETE FROM daily_cny_exchange_rates')
+        rows=self.execution()
+        self.assertIsNone(rows[0]['expense']);self.assertIsNone(rows[-1]['closing'])
+        self.assertEqual(rows[0]['opening'],'0.00')
+        self.assertIn('缺少汇率',rows[0]['warnings'][0]['reason'])
+        with database.connect() as c:
+            c.execute("INSERT INTO daily_cny_exchange_rates(rate_date,usd_cny_rate,hkd_cny_rate,source,market_date) VALUES ('2026-09-01','7','1','test','2026-09-01')")
+        self.assertEqual(self.execution()[-1]['closing'],'80.00')
+        other=self.setting('systems',name='混合预算',currency_code='CNY')['id']
+        b=self.transaction(amount='10',budget=other,day='2026-09-01')
+        group=self.call('POST','/api/offset-groups',dict(title='跨预算消费',kind='expense',transaction_ids=[a['id'],b['id']]),201)
+        for sid in (self.daily,other):
+            row=self.execution(system=sid)[-1]
+            self.assertIsNone(row['closing']);self.assertEqual(row['warnings'][0]['entry_id'],group['id'])
+
+    def test_execution_manual_start_opening_and_currency_correction(self):
+        self.setting('systems',self.daily,name='日常预算',currency_code='HKD',execution_start_month='2026-10',opening_balance='-30.50')
+        self.transaction(amount='999',day='2026-09-01')
+        self.transaction(amount='20',day='2026-10-01')
+        self.plan(currency='HKD',total='100',items=[])
+        rows=self.execution()
+        self.assertFalse(rows[0]['started']);self.assertIsNone(rows[0]['closing'])
+        self.assertEqual(rows[1]['closing'],'49.50')
+        self.call('PUT',f'/api/budget/systems/{self.daily}/currency',self.currency_change_body('JPY'),422)
+        self.call('PUT',f'/api/budget/systems/{self.daily}/currency',self.currency_change_body('CNY'))
+        self.assertEqual(self.execution()[1]['opening'],'-30.50')
+        self.config=self.call('GET','/api/budget/config')
+        self.call('PUT',f'/api/budget/config/systems/{self.daily}',dict(expected_version=self.config['version'],name='日常预算',execution_start_month=None),422)
+
+    def test_execution_usd_conversion_and_unsupported_currency(self):
+        self.plan(currency='USD',total='100',items=[])
+        self.transaction(amount='70')
+        self.assertEqual(self.execution()[1]['expense'],'10.00')
+        self.assertEqual(self.execution()[1]['closing'],'90.00')
+        with database.connect() as c:
+            c.execute("UPDATE accounts SET currency_code='EUR' WHERE id=?",(self.account,))
+        self.assertIsNone(self.execution()[1]['closing'])
+        self.call('GET',f'/api/budget/execution?system_id={self.daily}&start_month=2026-11&end_month=2026-10',code=422)
+
+    def test_execution_settings_migration_is_backed_up_and_idempotent(self):
+        self.plan(items=[],total='100')
+        with database.connect() as c:
+            c.execute('ALTER TABLE budget_systems DROP COLUMN execution_start_month')
+            c.execute('ALTER TABLE budget_systems DROP COLUMN opening_minor')
+        database.initialize_database()
+        self.assertEqual(self.execution()[1]['closing'],'100.00')
+        backups=list(database.BACKUP_DIR.glob('finance-pre-budget-execution-*.db'))
+        self.assertEqual(len(backups),1)
+        with sqlite3.connect(backups[0]) as c:
+            self.assertNotIn('opening_minor',[r[1] for r in c.execute('PRAGMA table_info(budget_systems)')])
+        database.initialize_database()
+        self.assertEqual(len(list(database.BACKUP_DIR.glob('finance-pre-budget-execution-*.db'))),1)
+
     def test_budget_filter_affects_raw_summary_and_analysis_not_balances(self):
         other=self.setting('systems',name='专项')['id']
         a=self.transaction(amount='100',budget=self.daily)

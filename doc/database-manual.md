@@ -134,6 +134,7 @@ SELECT id, kind, name FROM categories ORDER BY kind, sort_order, id;
 
 - `budget_systems` 保存预算用途名称、启用状态及唯一预算币种 `currency_code`；未指定时首次编制确定。`budget_storage_methods` 保存所有预算共用的存储层级，不再隶属某个预算；旧 ID 映射存入 `budget_storage_aliases`，迁移前备份 `finance-pre-shared-storage-*.db`。`budget_purposes` 保留各预算旧用途标签，新分配不要求选择此标签。
 - `budget_plans` 按系统、月份、币种唯一，`total_minor` 保存总预算；`budget_plan_items` 保存其存储分配，`budget_plan_revisions` 保存历史快照。累计总预算只加每份计划的当前总额，分配在总额内拆分，不重复相加。旧总额为 NULL 时查询暂按明细合计，不回填旧记录。
+- `budget_systems.execution_start_month` 可空，留空按该预算最早计划或支出月起算；`opening_minor` 保存有正负号的期初预算结余。两者通过设置页维护。执行结余按计划与冲销后支出只读计算，不存结转流水、不写回月计划；更正预算币种也保持期初可见数字并重新编码精度。新增字段前备份 `finance-pre-budget-execution-*.db`。
 - 页面每系统、每月只编制一份计划，币种继承系统；原表的三字段唯一键保留以兼容旧多币种记录，所有写接口增加系统币种校验。更正币种走专用预览接口，统一更正该系统各月金额的单位，数字保持不变；保留计划与明细 ID，历史快照保留原币种，精度错误或版本冲突全部回滚。勿直接改数据库币种字段，以免把整数最小单位误当相同数字。
 - 升级前备份 `finance-pre-budget-currency-*.db`，旧系统仅有一种计划币种时自动继承，旧多币种系统原样保留并只读展示，避免静默混加。
 - `budget_assignment_rules`、`budget_entry_presets` 保存精确分类映射和命名预设。`app_settings` 保存分别适用于支出、入账的默认预算 ID，以及设置版本。
