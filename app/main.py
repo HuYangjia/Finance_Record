@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from app.database import ROOT_DIR, connect, create_backup, initialize_database
 from app.budgets import router as budgets_router, require_system, budget_filter_sql
+from app.budget_storage import router as budget_storage_router
 from app.offsets import (
     router as offsets_router,
     annotate_transactions,
@@ -119,6 +120,7 @@ app = FastAPI(title="个人财务账本", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(offsets_router)
 app.include_router(budgets_router)
+app.include_router(budget_storage_router)
 
 
 @app.get("/offsets", include_in_schema=False)

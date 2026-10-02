@@ -56,6 +56,32 @@ CREATE TABLE IF NOT EXISTS budget_plan_funding (
 );
 CREATE INDEX IF NOT EXISTS budget_funding_transaction ON budget_plan_funding(transaction_id);
 CREATE INDEX IF NOT EXISTS budget_funding_group ON budget_plan_funding(group_id);
+CREATE TABLE IF NOT EXISTS budget_storage_defaults (
+    budget_system_id INTEGER PRIMARY KEY REFERENCES budget_systems(id) ON DELETE RESTRICT,
+    storage_method_id INTEGER NOT NULL REFERENCES budget_storage_methods(id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS budget_storage_expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    budget_system_id INTEGER NOT NULL REFERENCES budget_systems(id) ON DELETE RESTRICT,
+    transaction_id INTEGER REFERENCES transactions(id) ON DELETE CASCADE,
+    group_id INTEGER REFERENCES transaction_offset_groups(id) ON DELETE CASCADE,
+    storage_method_id INTEGER NOT NULL REFERENCES budget_storage_methods(id) ON DELETE RESTRICT,
+    CHECK ((transaction_id IS NOT NULL AND group_id IS NULL) OR
+           (transaction_id IS NULL AND group_id IS NOT NULL)),
+    UNIQUE(budget_system_id,transaction_id), UNIQUE(budget_system_id,group_id)
+);
+CREATE TABLE IF NOT EXISTS budget_storage_transfers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    budget_system_id INTEGER NOT NULL REFERENCES budget_systems(id) ON DELETE RESTRICT,
+    month TEXT NOT NULL,
+    source_id INTEGER REFERENCES budget_storage_methods(id) ON DELETE RESTRICT,
+    destination_id INTEGER REFERENCES budget_storage_methods(id) ON DELETE RESTRICT,
+    currency_code TEXT NOT NULL REFERENCES currencies(code),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor > 0),
+    note TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
+    CHECK (source_id IS NOT destination_id)
+);
+CREATE INDEX IF NOT EXISTS budget_storage_transfer_month ON budget_storage_transfers(budget_system_id,month);
 CREATE TABLE IF NOT EXISTS budget_assignment_rules (
     id INTEGER PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('expense','income')),
     category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,

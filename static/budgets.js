@@ -97,6 +97,11 @@
   }
   function renderMatrix(){
     if(!overview)return;const host=$('budget-matrix');host.replaceChildren();const cumulative=$('matrix-scope').value==='cumulative',root=$('matrix-level').value==='root';
+    if($('matrix-scope').value==='remaining'){
+      BudgetStorage.render(host,overview.storage,root,transpose,row=>BudgetStorage.open(row.budget_system_id,scope.month,async()=>{config=await request('/api/budget/config');await reload(false);}));
+      $('matrix-caption').textContent=`截至 ${scope.month} · 已扣完整事项净消费，正负余额连续结转，不受累计起始月筛选影响。点击金额或“管理”设置默认扣款、调整特殊消费归属和调拨；这里是预算剩余，不是投资市值。`;
+      return;
+    }
     const all=overview.plans.filter(p=>cumulative||p.month===scope.month);
     for(const code of [...new Set(all.map(p=>p.currency_code))]){
       const ps=all.filter(p=>p.currency_code===code),items=ps.flatMap(p=>p.items),places=overview.currencies.find(c=>c.currency_code===code).decimal_places;
@@ -114,7 +119,7 @@
       const wrap=node('div','','table-wrap');wrap.append(table);host.append(node('h3',code),wrap);
     }
     if(!all.length)host.append(node('p','所选范围暂无已保存预算。','plan-empty'));
-    $('matrix-caption').textContent=`${cumulative?(scope.start||'全部历史')+' 至 ':''}${scope.month} · ${cumulative?'累计安排':'所选月计划'}未扣消费。预算剩余请看上方“预算执行与连续结转”的结转余额；各存储尚未指定消费扣减。总预算＝存储分配＋待分配，点击金额查看来源。`;
+    $('matrix-caption').textContent=`${cumulative?(scope.start||'全部历史')+' 至 ':''}${scope.month} · ${cumulative?'累计安排':'所选月计划'}未扣消费。消费后的余额请切换“截至所选月剩余”。总预算＝存储分配＋待分配，点击金额查看来源。`;
   }
   function setIdentityControls(){options($('entry-system'),config.systems.filter(s=>s.is_active||s.id===Number(identity.system)),null,identity.system);$('entry-month').value=identity.month;}
   async function openEditor(key,selectable=false){

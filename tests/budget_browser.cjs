@@ -58,6 +58,7 @@ const base='http://127.0.0.1:18110';
   console.log('PASS settings, catalog copy, category rule and salary preset');
 
   await page.goto(base+'/budgets');await text('#budget-status','已加载');
+  await page.selectOption('#matrix-scope','month');
   await page.fill('#plan-month','2026-10');await text('#month-plans-title','2026-10');
   await page.click('#new-budget');await text('#plan-state','2026-10');
   assert.equal(await page.locator('#entry-system option').count(),settings.systems.filter(s=>s.is_active).length);

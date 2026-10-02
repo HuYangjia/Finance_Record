@@ -112,6 +112,7 @@ const base='http://127.0.0.1:18110';
     const peerETF=config.storage.find(s=>s.name==='ETF').id;
     await json(await api.put('/api/budget/plans/'+peer+'/2026-09/HKD',{data:{expected_version:0,total:'2000',allocation_mode:true,items:[{storage_method_id:peerETF,amount:'800'}]}}));
     await page.goto(base+'/budgets');await text('#budget-status','已加载');await month('2026-09');
+    await page.selectOption('#matrix-scope','month');
     const hkdTable=page.locator('#budget-matrix > h3').filter({hasText:'HKD'}).locator('+ .table-wrap table');
     assert.equal(await hkdTable.locator('thead th').filter({hasText:/^ETF$/}).count(),1);
     assert.deepEqual(await hkdTable.locator('tbody tr').last().locator('td,th').allTextContents(),['合计','1015.00','2235.00','3250.00']);

@@ -98,7 +98,7 @@ def config_data(c):
 
 
 @contextmanager
-def mutation(expected_config=None):
+def mutation(expected_config=None, extra_snapshot=None):
     backup = create_backup()
     try:
         with connect() as c:
@@ -106,13 +106,14 @@ def mutation(expected_config=None):
             before = config_data(c) if expected_config is not None else None
             if before is not None and expected_config != before['version']:
                 raise HTTPException(409, '设置已更新，请重新加载后再编辑。')
+            extra_before = extra_snapshot(c) if extra_snapshot else None
             yield c
             if before is not None:
                 c.execute("UPDATE app_settings SET value=?,updated_at=CURRENT_TIMESTAMP WHERE key='budget_config_version'", (str(before['version'] + 1),))
             c.execute('''INSERT INTO change_audit_logs(entity_type,action,before_json,after_json,backup_file)
                          VALUES ('budget','update',?,?,?)''',
-                      (json.dumps(before, ensure_ascii=False) if before else None,
-                       json.dumps(config_data(c), ensure_ascii=False) if before else '{"operation":"plan_revision"}', backup.name))
+                      (json.dumps(dict(config=before,storage=extra_before),ensure_ascii=False) if extra_snapshot else json.dumps(before, ensure_ascii=False) if before else None,
+                       json.dumps(dict(config=config_data(c),storage=extra_snapshot(c)),ensure_ascii=False) if extra_snapshot else json.dumps(config_data(c), ensure_ascii=False) if before else '{"operation":"plan_revision"}', backup.name))
     except sqlite3.IntegrityError as exc:
         raise HTTPException(409, '名称重复或存在引用，请保留历史项目并使用停用。') from exc
 
@@ -237,7 +238,7 @@ def save_config_item(collection, item_id, body):
             if 'currency_code' in body.model_fields_set:
                 if body.currency_code is not None:
                     currency(c, body.currency_code)
-                if old and old['currency_code'] != body.currency_code and c.execute('SELECT 1 FROM budget_plans WHERE budget_system_id=?', (item_id,)).fetchone():
+                if old and old['currency_code'] != body.currency_code and (c.execute('SELECT 1 FROM budget_plans WHERE budget_system_id=?', (item_id,)).fetchone() or c.execute('SELECT 1 FROM budget_storage_transfers WHERE budget_system_id=?',(item_id,)).fetchone()):
                     raise HTTPException(409, '已有月度计划，请使用“修改预算币种”预览并统一更正。')
                 values['currency_code'] = body.currency_code
             if {'execution_start_month','opening_balance','currency_code'} & body.model_fields_set:
@@ -573,7 +574,8 @@ def system_currency_data(c, system_id):
     system = next(s for s in config_data(c)['systems'] if s['id']==system_id)
     plans = [plan_data(c,system_id,r['month'],r['currency_code']) for r in c.execute(
         'SELECT month,currency_code FROM budget_plans WHERE budget_system_id=? ORDER BY month,currency_code', (system_id,))]
-    return dict(system=system,expected_version=config_data(c)['version'],plans=plans)
+    from app.budget_storage import transfers_data
+    return dict(system=system,expected_version=config_data(c)['version'],plans=plans,storage_transfers=transfers_data(c,system_id))
 
 
 @router.get('/api/budget/systems/{system_id}/currency')
@@ -586,7 +588,8 @@ def get_system_currency(system_id: int):
 @router.put('/api/budget/systems/{system_id}/currency')
 def change_system_currency(system_id: int, body: SystemCurrencyWrite):
     """Correct the denomination of every monthly plan, retaining visible numbers and history."""
-    with mutation(body.expected_version) as c:
+    from app.budget_storage import snapshot, correct_currency
+    with mutation(body.expected_version,lambda c:snapshot(c,system_id)) as c:
         require_system(c,system_id)
         places = currency(c,body.currency_code)
         before = system_currency_data(c,system_id)
@@ -608,6 +611,7 @@ def change_system_currency(system_id: int, body: SystemCurrencyWrite):
             except HTTPException as exc:
                 raise HTTPException(422, f"{p['month']} 的金额不符合 {body.currency_code} 精度或范围，请先修改该月金额。") from exc
         opening = signed_minor(Decimal(before['system']['opening_balance']),places)
+        correct_currency(c,system_id,body.currency_code)
         c.execute('UPDATE budget_systems SET currency_code=?,opening_minor=? WHERE id=?', (body.currency_code,opening,system_id))
         for p,(total,items) in zip(before['plans'],amounts):
             c.execute('INSERT OR IGNORE INTO budget_plan_revisions(plan_id,version,snapshot) VALUES (?,?,?)',
@@ -679,7 +683,9 @@ def budget_overview(end_month: str, start_month: str = '0001-01', system_id: int
             blocks.append(dict(currency_code=code,decimal_places=places,monthly=sums([p for p in selected if p['month']==end_month]),cumulative=sums(selected)))
         from app.budget_execution import execution_report
         execution=execution_report(c,end_month,system_id=system_id,currency_code=currency_code)
-        return dict(start_month=start_month,end_month=end_month,plans=plans,currencies=blocks,items=items,execution=execution)
+        from app.budget_storage import storage_report
+        storage=storage_report(c,end_month,system_id,currency_code,execution)
+        return dict(start_month=start_month,end_month=end_month,plans=plans,currencies=blocks,items=items,execution=execution,storage=storage)
 
 
 @router.get('/api/budget/execution')
@@ -724,6 +730,22 @@ def budget_overview_export(end_month: str, start_month: str = '0001-01', system_
             note+='；收入来源存在不足或待处理绑定，余额仍按计划计算'
         sheet.append([row['month'],safe(row['system_name']),row['currency_code'],row['origin_month']]+
                      [Decimal(row[key]) if row[key] is not None else None for key in ('opening','added','available','expense','closing')]+[note])
+    sheet.freeze_panes='A2'
+    sheet=book.create_sheet('存储剩余')
+    sheet.append(['截至月份','预算','币种','存储方式','预算剩余','预算结转余额','说明'])
+    for row in data['storage']['rows']:
+        note=row['reason'] or ('存在待归属消费，请设置默认扣款或单独归属' if row['pending_count'] else '预算额度，不代表投资市值')
+        if not row['complete']:note+='；余额未完整计算'
+        for cell in row['cells']:
+            sheet.append([end_month,safe(row['system_name']),row['currency_code'],safe(cell['label']),
+                          Decimal(cell['balance']) if cell['balance'] is not None else None,
+                          Decimal(row['total']) if row['total'] is not None else None,note])
+    sheet.freeze_panes='A2'
+    sheet=book.create_sheet('存储调拨')
+    sheet.append(['预算','生效月份','转出','转入','币种','金额','说明','版本'])
+    for row in data['storage']['rows']:
+        for move in row['transfers']:
+            sheet.append([safe(row['system_name']),move['month'],safe(move['source_name']),safe(move['destination_name']),move['currency_code'],Decimal(move['amount']),safe(move['note']),move['version']])
     sheet.freeze_panes='A2'
     out=BytesIO(); book.save(out); out.seek(0)
     return StreamingResponse(out,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename="budget-plan.xlsx"'})

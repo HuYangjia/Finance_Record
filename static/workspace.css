@@ -297,3 +297,26 @@ tbody tr:hover td { background: #fafcf9; }
 .funding-candidate > p { font-size: 13px; }
 .funding-candidate > button { margin-top: 12px; }
 .funding-pagination { display: flex; justify-content: end; gap: 10px; }
+.matrix-manage { margin-left: 10px; min-height: 28px; padding: 3px 8px; border: 1px solid var(--line); background: #fff; color: var(--accent); font-size: 11px; }
+.storage-negative, #budget-matrix .storage-negative .matrix-amount { color: #ad4242; }
+.storage-warning { color: #9a5b34; font-size: 12px; line-height: 1.8; }
+.storage-manage-dialog { width: min(1100px,94vw); max-width: 1100px; max-height: 90vh; padding: 0; overflow: hidden; }
+.storage-manage-dialog[open] { display: flex; flex-direction: column; }
+.storage-manage-dialog > .dialog-heading { margin: 0; padding: 20px 26px; flex-shrink: 0; background: #f6faf7; border-bottom: 1px solid var(--line); }
+.storage-manage-dialog h2 { font-size: 19px; margin: 0; }
+.storage-manage-scroll { overflow-y: auto; min-height: 0; padding: 20px 26px; overscroll-behavior: contain; }
+#storage-manage-error { margin: 0; padding: 12px 26px; }
+#storage-manage-error:empty { display: none; }
+#storage-reload { margin: 12px 26px 18px; align-self: flex-end; flex-shrink: 0; }
+.storage-summary { display: flex; flex-wrap: wrap; gap: 12px; }
+.storage-summary > div { min-width: 135px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 8px; background: #f6faf7; }
+.storage-summary small, .storage-summary strong { display: block; }
+.storage-summary small { color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+.storage-tabs { display: flex; gap: 10px; margin: 22px 0; }
+.storage-tabs .is-active { color: #fff; background: var(--accent); }
+.storage-form { display: grid; gap: 14px; padding: 18px; background: #f7faf7; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 20px; }
+.storage-form > button { justify-self: start; }
+.storage-transfer-grid { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.storage-manage-content table td:last-child { white-space: nowrap; }
+.storage-manage-content table td:last-child button + button { margin-left: 6px; }
+.storage-manage-content table td:nth-child(2), .storage-manage-content table td:nth-child(4) { white-space: normal; min-width: 140px; }
