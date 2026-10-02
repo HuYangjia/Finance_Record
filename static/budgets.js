@@ -114,7 +114,7 @@
       const wrap=node('div','','table-wrap');wrap.append(table);host.append(node('h3',code),wrap);
     }
     if(!all.length)host.append(node('p','所选范围暂无已保存预算。','plan-empty'));
-    $('matrix-caption').textContent=`${cumulative?(scope.start||'全部历史')+' 至 ':''}${scope.month} · 只统计已保存计划。总预算＝存储分配＋待分配；点击金额查看来源。`;
+    $('matrix-caption').textContent=`${cumulative?(scope.start||'全部历史')+' 至 ':''}${scope.month} · ${cumulative?'累计安排':'所选月计划'}未扣消费。预算剩余请看上方“预算执行与连续结转”的结转余额；各存储尚未指定消费扣减。总预算＝存储分配＋待分配，点击金额查看来源。`;
   }
   function setIdentityControls(){options($('entry-system'),config.systems.filter(s=>s.is_active||s.id===Number(identity.system)),null,identity.system);$('entry-month').value=identity.month;}
   async function openEditor(key,selectable=false){

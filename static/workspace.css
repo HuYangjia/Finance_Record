@@ -176,10 +176,12 @@ tbody tr:hover td { background: #fafcf9; }
 .matrix-controls button { justify-self: start; font-size: 12px; }
 #budget-matrix { max-height: 580px; overflow: auto; border: 1px solid #e0e8df; }
 #budget-matrix table { border-collapse: separate; border-spacing: 0; }
-#budget-matrix th { position: sticky; left: 0; white-space: nowrap; }
-#budget-matrix thead th { top: 0; z-index: 2; }
-#budget-matrix td:not(:first-child), #budget-matrix th:last-child { text-align: right; }
-#budget-matrix .matrix-amount { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 76px; }
+#budget-matrix th { white-space: nowrap; }
+#budget-matrix tr > :first-child { position: sticky; left: 0; z-index: 1; text-align: left; }
+#budget-matrix thead th { position: sticky; top: 0; z-index: 2; }
+#budget-matrix thead th:first-child { z-index: 3; }
+#budget-matrix tr > :not(:first-child) { text-align: right; }
+#budget-matrix .matrix-amount { width: 100%; padding-inline: 0; border-inline: 0; text-align: right; font: inherit; font-variant-numeric: tabular-nums; font-weight: 600; min-width: 76px; }
 #budget-matrix tbody tr:last-child > * { background: #edf4e9; font-weight: 700; }
 .settings-layout { display: grid; grid-template-columns: 340px minmax(0,1fr); align-items: start; gap: 24px; }
 .defaults-panel .form-grid { grid-template-columns: 1fr; gap: 18px; }
