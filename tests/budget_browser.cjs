@@ -23,7 +23,7 @@ const base='http://127.0.0.1:18110';
   const savePlan=async version=>{await page.click('#save-plan');await page.waitForSelector('#plan-editor[open]',{state:'hidden'});await idle();assert.equal((await get('/api/budget/plans/'+daily+'/'+await page.locator('#plan-month').inputValue()+'/CNY')).version,version);};
   const cats=await get('/api/categories?kind=expense'),incomeCats=await get('/api/categories?kind=income');
   const food=cats.find(c=>c.name==='餐饮').id,traffic=cats.find(c=>c.name==='交通').id,salary=incomeCats.find(c=>c.name==='工资/劳务').id;
-  const accounts=await get('/api/accounts'),octopus=accounts.find(a=>a.code==='OCTOPUS-STUDENT').id,wechat=accounts.find(a=>a.code==='WECHAT').id;
+  const accounts=await get('/api/accounts'),octopus=accounts.find(a=>a.code==='OCTOPUS-STUDENT').id,wechat=accounts.find(a=>a.code==='WECHAT').id,za=accounts.find(a=>a.code==='ZABANK-HKD').id;
   if(process.argv.includes('--visual')){
     for(const width of (process.argv.includes('--mobile')?[1440,390]:[1440])){
       await page.setViewportSize({width,height:width===390?844:1050});
@@ -90,7 +90,8 @@ const base='http://127.0.0.1:18110';
 
   await page.goto(base+'/');await page.waitForFunction(()=>!document.querySelector('#expense-budget-system').disabled);
   assert.equal(await page.locator('form').count(),3);assert.equal(await page.locator('#expense-budget-system').inputValue(),String(daily));
-  const picker=page.locator('#source-account').locator('..').locator('.frequent-picker');await picker.locator('.frequent-picker-trigger').click();if(await picker.locator('.frequent-picker-other-toggle').count())await picker.locator('.frequent-picker-other-toggle').click();assert(await picker.locator('.frequent-picker-option').count()>1);await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#source-account').inputValue(),String(za));
+  const picker=page.locator('#source-account').locator('..').locator('.frequent-picker');await picker.locator('.frequent-picker-trigger').click();assert((await picker.locator('.frequent-picker-option').first().textContent()).includes('ZABank'));if(await picker.locator('.frequent-picker-other-toggle').count())await picker.locator('.frequent-picker-other-toggle').click();assert(await picker.locator('.frequent-picker-option').count()>1);await page.keyboard.press('Escape');
   await page.fill('#transaction-date','2026-10-01');await page.fill('#expense-amount','25');await page.fill('#note','支出草稿');
   await page.locator('.entry-mode[data-mode=income]').click();await page.fill('#income-date','2026-10-02');await page.fill('#income-amount','10');await page.fill('#income-note','入账草稿');
   await page.locator('.entry-mode[data-mode=transfer]').click();await page.fill('#transfer-note','转账草稿');
@@ -119,12 +120,19 @@ const base='http://127.0.0.1:18110';
   console.log('PASS page 3 dropdowns, budget search, summary, analysis and edit attribution');
 
   const members=(await get('/api/transactions/search')).transactions.filter(t=>['expense','income'].includes(t.transaction_type));
+  await page.selectOption('#search-budget-system','');await page.selectOption('#cashflow-basis','offset');await page.locator('#transaction-search-form button[type=submit]').click();
+  const ordinaryExpenseCount=members.filter(t=>t.transaction_type==='expense').length;
+  await page.waitForFunction(count=>document.querySelectorAll('#search-results-body .offset-transaction-entry').length===count,ordinaryExpenseCount);
+  assert.equal(await page.locator('#search-results-body .offset-transaction-entry').count(),ordinaryExpenseCount);
+  assert.equal(await page.locator('#search-results-body .offset-members').count(),0);
+  assert(!(await page.locator('#search-results-body').textContent()).includes('原始支出'));
   const groupResponse=await api.post('/api/offset-groups',{data:{title:'浏览器跨预算',kind:'expense',transaction_ids:members.map(t=>t.id)}});assert(groupResponse.ok(),await groupResponse.text());
   const main=await get(`/api/transactions/${members.find(t=>t.transaction_type==='expense').id}`);
   const update=await api.put(`/api/transactions/${main.id}`,{data:{...main,budget_system_id:null}});assert(update.ok(),await update.text());
   await page.selectOption('#search-budget-system',String(special));await page.selectOption('#cashflow-basis','offset');await page.locator('#transaction-search-form button[type=submit]').click();await text('#budget-query-warning','浏览器跨预算');await text('#transaction-search-summary-content','仅已归属事项');
   await page.selectOption('#search-budget-system','');await page.locator('#transaction-search-form button[type=submit]').click();await text('#transaction-search-summary-content','55.00');assert(await page.locator('#budget-query-warning').isHidden());
-  console.log('PASS cross-budget offset warning and all-budget net counted once');
+  assert.equal(await page.locator('#search-results-body .offset-transaction-entry').count(),0);assert.equal(await page.locator('#search-results-body .offset-members').count(),1);
+  console.log('PASS compact ordinary rows, detailed offset group, cross-budget warning and all-budget net counted once');
 
   if(process.argv.includes('--mobile')){
   await page.setViewportSize({width:390,height:844});await page.goto(base+'/budgets');await text('#budget-status','已加载');

@@ -214,10 +214,8 @@ function setStatus(message, type = "") {
 }
 
 function selectDefaultExpenseAccount() {
-  const preferredAccount =
-    state.accounts.find((account) => account.code === "OCTOPUS-STUDENT") ||
-    state.accounts[0];
-  expenseAccountSelect.value = preferredAccount ? String(preferredAccount.id) : "";
+  const preferredValue = expenseAccountSelect._frequentPicker?.preferredValue();
+  expenseAccountSelect.value = preferredValue || (state.accounts[0] ? String(state.accounts[0].id) : "");
 }
 
 function selectDefaultExpenseCategory() {

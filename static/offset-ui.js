@@ -69,7 +69,29 @@ window.OffsetUI = (() => {
     }
     table.append(body); wrap.append(table); details.append(wrap); return details;
   }
+  function transactionCell(entry, editTransaction) {
+    const member = entry.members[0];
+    const cell = node('div', '', 'offset-transaction-entry');
+    cell.append(
+      node('span', member.transaction_date, 'offset-transaction-date'),
+      node('span', member.transaction_type === 'expense' ? '支出' : '收入', 'status-badge'),
+      node('strong', member.account_name, 'offset-transaction-account'),
+      node('strong', `${member.amount} ${member.currency_code}`, 'offset-transaction-amount'),
+      node('span', [member.category_name, member.counterparty, member.note].filter(Boolean).join(' · '), 'offset-transaction-description'),
+      node('span', member.effective_budget_system_name || member.budget_system_name || '未归属', 'status-badge'),
+    );
+    const action = node('span', '', 'offset-transaction-action');
+    if (editTransaction) {
+      const button = node('button', '编辑', 'table-action'); button.type = 'button';
+      button.addEventListener('click', () => editTransaction(member.id)); action.append(button);
+    } else {
+      const original = node('a', `查看流水 #${member.id}`); original.href = `/accounts?transaction=${member.id}`; action.append(original);
+    }
+    cell.append(action);
+    return cell;
+  }
   function entryCell(entry, editTransaction) {
+    if (entry.entry_type === 'transaction') return transactionCell(entry, editTransaction);
     const cell = node('div', '', 'offset-entry');
     const title = node('div', '', 'offset-entry-title');
     title.append(node('strong', entry.title), node('span', `${entry.statistics_date} · ${entry.kind === 'expense' ? '净支出' : '净收入'} · ${entry.category_name}`));

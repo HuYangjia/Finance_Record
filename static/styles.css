@@ -1333,6 +1333,19 @@ button.analysis-calendar-day:not(:disabled):hover {
 .offset-member-row small { color: #596b7c; }
 .offset-members { margin: 12px 0; }
 .offset-members summary { cursor: pointer; }
+.offset-transaction-entry {
+  display: grid;
+  grid-template-columns: 100px 56px minmax(150px, .8fr) 120px minmax(180px, 1.4fr) minmax(90px, auto) 58px;
+  gap: 12px;
+  align-items: center;
+  min-width: 900px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e2e8ef;
+  white-space: normal;
+}
+.offset-transaction-amount { text-align: right; font-variant-numeric: tabular-nums; }
+.offset-transaction-description { color: #405466; }
+.offset-transaction-action { text-align: right; }
 .offset-dialog { width: min(1000px, 95vw); padding: 24px; max-height: 90vh; overflow: auto; }
 .negative-amount { color: #9b4055; }
 .signed-track { position: relative; height: 8px; margin-top: 6px; background: linear-gradient(to right, #f4f6f8 49.5%, #94a3b8 49.5%, #94a3b8 50.5%, #f4f6f8 50.5%); }

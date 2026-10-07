@@ -17,29 +17,19 @@
     }
   }
 
-  function activityTier(activity) {
+  function activityScore(activity) {
     const recordCount = Number(activity.record_count) || 0;
-    if (Object.hasOwn(activity, "recent_record_count")) {
-      return Number(activity.recent_record_count) > 0
-        ? 2
-        : recordCount > 0
-          ? 1
-          : 0;
+    if (!Object.hasOwn(activity, "recent_record_count")) {
+      return recordCount;
     }
-    return recordCount > 0 ? 1 : 0;
-  }
-
-  function activityPriorityCount(activity) {
-    const recentRecordCount = Number(activity.recent_record_count);
-    return Number.isFinite(recentRecordCount) && recentRecordCount > 0
-      ? recentRecordCount
-      : Number(activity.record_count) || 0;
+    return recordCount + (Number(activity.recent_record_count) || 0) * 5;
   }
 
   function compareActivity(left, right) {
     return (
-      activityTier(right) - activityTier(left)
-      || activityPriorityCount(right) - activityPriorityCount(left)
+      activityScore(right) - activityScore(left)
+      || (Number(right.recent_record_count) || 0) - (Number(left.recent_record_count) || 0)
+      || (Number(right.record_count) || 0) - (Number(left.record_count) || 0)
       || (right.last_transaction_date || "").localeCompare(
         left.last_transaction_date || "",
       )
@@ -120,12 +110,9 @@
       }
     }
 
-    function renderMenu() {
-      menu.replaceChildren();
-      const allOptions = Array.from(select.options);
-      const emptyOption = allOptions.find((option) => option.value === "");
-      const records = allOptions.filter((option) => option.value !== "");
-      const common = records
+    function rankedRecords() {
+      return Array.from(select.options)
+        .filter((option) => option.value !== "")
         .map((option, index) => ({
           option,
           index,
@@ -135,7 +122,15 @@
         .sort((left, right) => (
           compareActivity(left.activity, right.activity)
           || left.index - right.index
-        ))
+        ));
+    }
+
+    function renderMenu() {
+      menu.replaceChildren();
+      const allOptions = Array.from(select.options);
+      const emptyOption = allOptions.find((option) => option.value === "");
+      const records = allOptions.filter((option) => option.value !== "");
+      const common = rankedRecords()
         .slice(0, configuration.commonLimit)
         .map((item) => item.option);
       const commonValues = new Set(common.map((option) => option.value));
@@ -210,6 +205,9 @@
       },
       configure(nextOptions = {}) {
         Object.assign(configuration, nextOptions);
+      },
+      preferredValue() {
+        return rankedRecords()[0]?.option.value || "";
       },
       refresh,
       setRequired(value) {
