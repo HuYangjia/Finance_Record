@@ -25,6 +25,7 @@ CATEGORY_SEED = (
     ("income", "工资/劳务", 20),
     ("income", "父母支持", 30),
     ("income", "利息/股息", 40),
+    ("income", "回赠", 45),
     ("income", "报销/返还", 50),
     ("income", "其他收入", 90),
     ("expense", "住房", 10),

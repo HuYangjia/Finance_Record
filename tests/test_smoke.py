@@ -165,7 +165,7 @@ class FinanceAppSmokeTest(unittest.TestCase):
         self.assertIn("账户内流动", workbook.sheetnames)
         self.assertEqual(workbook["月度总览"]["E3"].value, "可用现金")
 
-    def test_default_expense_categories_include_food_groceries_and_payroll(self):
+    def test_default_categories_include_food_payroll_and_cashback(self):
         with database.connect() as connection:
             food_category = connection.execute(
                 """
@@ -181,11 +181,20 @@ class FinanceAppSmokeTest(unittest.TestCase):
                 WHERE kind = 'expense' AND name = '工资/劳务支出'
                 """
             ).fetchone()
+            cashback_category = connection.execute(
+                """
+                SELECT sort_order
+                FROM categories
+                WHERE kind = 'income' AND name = '回赠'
+                """
+            ).fetchone()
 
         self.assertIsNotNone(food_category)
         self.assertEqual(food_category["sort_order"], 25)
         self.assertIsNotNone(payroll_category)
         self.assertEqual(payroll_category["sort_order"], 95)
+        self.assertIsNotNone(cashback_category)
+        self.assertEqual(cashback_category["sort_order"], 45)
 
     def test_daily_snapshot_drives_account_and_category_common_data(self):
         with database.connect() as connection:
