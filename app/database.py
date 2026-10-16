@@ -72,6 +72,13 @@ def initialize_database() -> None:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
                 with sqlite3.connect(BACKUP_DIR / f"finance-pre-shared-storage-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
+            storage_columns = ({r[1] for r in existing.execute('PRAGMA table_info(budget_storage_methods)')}
+                               if 'budget_storage_methods' in tables else set())
+            if 'is_placeholder' in storage_columns and existing.execute(
+                    'SELECT 1 FROM budget_storage_methods WHERE is_placeholder=1').fetchone():
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-unallocated-storage-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
             if 'budget_systems' in tables and 'currency_code' not in {r[1] for r in existing.execute('PRAGMA table_info(budget_systems)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
                 with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-currency-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
@@ -93,8 +100,9 @@ def initialize_database() -> None:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.executescript(BUDGET_SCHEMA_PATH.read_text(encoding="utf-8"))
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-        from app.budget_migrations import migrate_shared_storage
+        from app.budget_migrations import migrate_shared_storage, migrate_unallocated_storage
         migrate_shared_storage(connection)
+        migrate_unallocated_storage(connection)
         if 'execution_start_month' not in {r['name'] for r in connection.execute('PRAGMA table_info(budget_systems)')}:
             connection.execute('ALTER TABLE budget_systems ADD COLUMN execution_start_month TEXT')
             connection.execute('ALTER TABLE budget_systems ADD COLUMN opening_minor INTEGER NOT NULL DEFAULT 0')
@@ -127,11 +135,11 @@ def initialize_database() -> None:
         )
         if not connection.execute("SELECT 1 FROM app_settings WHERE key='budget_initialized'").fetchone():
             system_id = connection.execute("INSERT INTO budget_systems(name) VALUES ('日常预算')").lastrowid
-            for table, names in [('budget_storage_methods', ['待定存储方式','活期','定期','ETF','股票']),
+            for table, names in [('budget_storage_methods', ['活期','定期','ETF','股票']),
                                  ('budget_purposes', ['待定用途','日常生活','慈善','留存'])]:
-                for order, name in enumerate(names):
+                for order, name in enumerate(names, start=1 if table == 'budget_storage_methods' else 0):
                     if table == 'budget_storage_methods':
-                        connection.execute(f'INSERT INTO {table}(name,sort_order,is_placeholder) VALUES (?,?,?)', (name,order,int(order==0)))
+                        connection.execute(f'INSERT INTO {table}(name,sort_order,is_placeholder) VALUES (?,?,0)', (name,order))
                     else:
                         connection.execute(f'INSERT INTO {table}(budget_system_id,name,sort_order,is_placeholder) VALUES (?,?,?,?)', (system_id,name,order,int(order==0)))
             connection.executemany('INSERT INTO app_settings(key,value) VALUES (?,?)', [

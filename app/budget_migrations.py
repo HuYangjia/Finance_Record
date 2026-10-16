@@ -58,3 +58,128 @@ def migrate_shared_storage(c):
         raise
     finally:
         c.execute('PRAGMA foreign_keys=ON')
+
+
+def migrate_unallocated_storage(c):
+    """Replace persisted storage placeholders with the derived unallocated balance."""
+    placeholder_ids = [
+        row['id']
+        for row in c.execute(
+            'SELECT id FROM budget_storage_methods WHERE is_placeholder=1 ORDER BY id'
+        )
+    ]
+    if not placeholder_ids:
+        return
+
+    marks = ','.join('?' for _ in placeholder_ids)
+    c.execute('BEGIN IMMEDIATE')
+    try:
+        affected_plans = [
+            row['plan_id']
+            for row in c.execute(
+                f'''SELECT DISTINCT plan_id FROM budget_plan_items
+                    WHERE storage_method_id IN ({marks})''',
+                placeholder_ids,
+            )
+        ]
+        for plan_id in affected_plans:
+            plan = c.execute(
+                'SELECT total_minor FROM budget_plans WHERE id=?', (plan_id,)
+            ).fetchone()
+            if plan['total_minor'] is None:
+                inferred_total = c.execute(
+                    'SELECT COALESCE(SUM(amount_minor),0) FROM budget_plan_items WHERE plan_id=?',
+                    (plan_id,),
+                ).fetchone()[0]
+                c.execute(
+                    'UPDATE budget_plans SET total_minor=? WHERE id=?',
+                    (inferred_total, plan_id),
+                )
+
+        c.execute(
+            f'DELETE FROM budget_storage_defaults WHERE storage_method_id IN ({marks})',
+            placeholder_ids,
+        )
+        c.execute(
+            f'DELETE FROM budget_storage_expenses WHERE storage_method_id IN ({marks})',
+            placeholder_ids,
+        )
+
+        transfers = [
+            dict(row)
+            for row in c.execute(
+                f'''SELECT * FROM budget_storage_transfers
+                    WHERE source_id IN ({marks}) OR destination_id IN ({marks})''',
+                placeholder_ids * 2,
+            )
+        ]
+        placeholder_set = set(placeholder_ids)
+        for transfer in transfers:
+            source_id = None if transfer['source_id'] in placeholder_set else transfer['source_id']
+            destination_id = None if transfer['destination_id'] in placeholder_set else transfer['destination_id']
+            if source_id == destination_id:
+                c.execute('DELETE FROM budget_storage_transfers WHERE id=?', (transfer['id'],))
+            else:
+                c.execute(
+                    '''UPDATE budget_storage_transfers
+                       SET source_id=?,destination_id=?,version=version+1
+                       WHERE id=?''',
+                    (source_id, destination_id, transfer['id']),
+                )
+
+        children = [
+            dict(row)
+            for row in c.execute(
+                f'''SELECT id,name FROM budget_storage_methods
+                    WHERE parent_id IN ({marks}) ORDER BY id''',
+                placeholder_ids,
+            )
+        ]
+        root_names = {
+            row['name']
+            for row in c.execute(
+                f'''SELECT name FROM budget_storage_methods
+                    WHERE parent_id IS NULL AND id NOT IN ({marks})''',
+                placeholder_ids,
+            )
+        }
+        for child in children:
+            base = name = child['name']
+            suffix = 1
+            while name in root_names:
+                suffix += 1
+                name = f'{base} {suffix}'
+            root_names.add(name)
+            c.execute(
+                'UPDATE budget_storage_methods SET parent_id=NULL,name=? WHERE id=?',
+                (name, child['id']),
+            )
+
+        c.execute(
+            f'DELETE FROM budget_plan_items WHERE storage_method_id IN ({marks})',
+            placeholder_ids,
+        )
+        if affected_plans:
+            plan_marks = ','.join('?' for _ in affected_plans)
+            c.execute(
+                f'''UPDATE budget_plans
+                    SET version=version+1,updated_at=CURRENT_TIMESTAMP
+                    WHERE id IN ({plan_marks})''',
+                affected_plans,
+            )
+        c.execute(
+            f'DELETE FROM budget_storage_methods WHERE id IN ({marks})',
+            placeholder_ids,
+        )
+        c.execute(
+            '''INSERT INTO app_settings(key,value) VALUES ('budget_config_version','2')
+               ON CONFLICT(key) DO UPDATE SET
+                   value=CAST(value AS INTEGER)+1,
+                   updated_at=CURRENT_TIMESTAMP'''
+        )
+        if c.execute('PRAGMA foreign_key_check').fetchone():
+            raise ValueError('待定存储迁移的引用校验失败，已回滚。')
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise

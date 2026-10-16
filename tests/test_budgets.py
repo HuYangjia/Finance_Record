@@ -428,6 +428,94 @@ class BudgetTest(unittest.TestCase):
         with database.connect() as c:
             self.assertEqual(c.execute('PRAGMA foreign_key_check').fetchall(),[])
 
+    def test_storage_placeholder_migrates_to_derived_unallocated_balance(self):
+        explicit=self.plan(month='2026-08',total='100',items=[self.item('50')])
+        expense=self.transaction(amount='5',day='2026-08-02')
+        with database.connect() as c:
+            placeholder=c.execute("""INSERT INTO budget_storage_methods(name,sort_order,is_placeholder)
+                                      VALUES ('待定存储方式',0,1)""").lastrowid
+            c.execute('''INSERT INTO budget_plan_items(
+                plan_id,storage_method_id,purpose_id,title,amount_minor,sort_order)
+                VALUES (?,?,?,?,?,?)''',(explicit['id'],placeholder,self.purpose,'尚未决定',3000,1))
+            snapshot=json.loads(c.execute(
+                'SELECT snapshot FROM budget_plan_revisions WHERE plan_id=? AND version=1',
+                (explicit['id'],)).fetchone()[0])
+            snapshot['items'].append(dict(storage_method_id=placeholder,amount='30.00',title='尚未决定'))
+            snapshot_text=json.dumps(snapshot,ensure_ascii=False)
+            c.execute('UPDATE budget_plan_revisions SET snapshot=? WHERE plan_id=? AND version=1',
+                      (snapshot_text,explicit['id']))
+
+            inferred=c.execute('''INSERT INTO budget_plans(
+                budget_system_id,month,currency_code,total_minor,version)
+                VALUES (?,?,?,?,3)''',(self.daily,'2026-07','CNY',None)).lastrowid
+            c.executemany('''INSERT INTO budget_plan_items(
+                plan_id,storage_method_id,purpose_id,title,amount_minor,sort_order)
+                VALUES (?,?,?,?,?,?)''',[
+                    (inferred,self.storage,self.purpose,'已分配',2000,0),
+                    (inferred,placeholder,self.purpose,'尚未决定',4000,1),
+                ])
+            c.execute('INSERT INTO budget_storage_defaults VALUES (?,?)',(self.daily,placeholder))
+            c.execute('''INSERT INTO budget_storage_expenses(
+                budget_system_id,transaction_id,storage_method_id) VALUES (?,?,?)''',
+                (self.daily,expense['id'],placeholder))
+            c.executemany('''INSERT INTO budget_storage_transfers(
+                budget_system_id,month,source_id,destination_id,currency_code,amount_minor)
+                VALUES (?,?,?,?,?,?)''',[
+                    (self.daily,'2026-08',placeholder,self.storage,'CNY',100),
+                    (self.daily,'2026-08',self.storage,placeholder,'CNY',100),
+                    (self.daily,'2026-08',None,placeholder,'CNY',100),
+                ])
+            c.execute('INSERT INTO budget_storage_aliases(old_id,storage_id) VALUES (?,?)',(999,placeholder))
+            child=c.execute("""INSERT INTO budget_storage_methods(parent_id,name)
+                               VALUES (?,'活期')""",(placeholder,)).lastrowid
+            config_version=int(c.execute(
+                "SELECT value FROM app_settings WHERE key='budget_config_version'").fetchone()[0])
+
+        database.initialize_database()
+        backups=list(database.BACKUP_DIR.glob('finance-pre-unallocated-storage-*.db'))
+        self.assertEqual(len(backups),1)
+        current=self.call('GET',f'/api/budget/plans/{self.daily}/2026-08/CNY')
+        self.assertEqual((current['total'],current['allocated'],current['version']),
+                         ('100.00','50.00',2))
+        inferred_plan=self.call('GET',f'/api/budget/plans/{self.daily}/2026-07/CNY')
+        self.assertEqual((inferred_plan['total'],inferred_plan['allocated'],inferred_plan['version']),
+                         ('60.00','20.00',4))
+        overview=self.call('GET','/api/budget/overview?end_month=2026-08')
+        migrated={row['month']:row for row in overview['plans'] if row['month'] in ('2026-07','2026-08')}
+        self.assertEqual((migrated['2026-08']['unallocated'],migrated['2026-08']['total_inferred']),
+                         ('50.00',False))
+        self.assertEqual((migrated['2026-07']['unallocated'],migrated['2026-07']['total_inferred']),
+                         ('40.00',False))
+        with database.connect() as c:
+            self.assertEqual(c.execute(
+                'SELECT snapshot FROM budget_plan_revisions WHERE plan_id=? AND version=1',
+                (explicit['id'],)).fetchone()[0],snapshot_text)
+            self.assertEqual(c.execute(
+                'SELECT COUNT(*) FROM budget_storage_methods WHERE is_placeholder=1').fetchone()[0],0)
+            self.assertEqual(c.execute(
+                'SELECT COUNT(*) FROM budget_storage_defaults').fetchone()[0],0)
+            self.assertEqual(c.execute(
+                'SELECT COUNT(*) FROM budget_storage_expenses').fetchone()[0],0)
+            transfers=[tuple(r) for r in c.execute(
+                'SELECT source_id,destination_id,version FROM budget_storage_transfers ORDER BY id')]
+            self.assertEqual(transfers,[(None,self.storage,2),(self.storage,None,2)])
+            renamed=c.execute(
+                'SELECT parent_id,name FROM budget_storage_methods WHERE id=?',(child,)).fetchone()
+            self.assertEqual(tuple(renamed),(None,'活期 2'))
+            self.assertFalse(c.execute(
+                'SELECT 1 FROM budget_storage_aliases WHERE old_id=999').fetchone())
+            self.assertEqual(int(c.execute(
+                "SELECT value FROM app_settings WHERE key='budget_config_version'").fetchone()[0]),
+                config_version+1)
+            self.assertEqual(c.execute('PRAGMA foreign_key_check').fetchall(),[])
+
+        database.initialize_database()
+        self.assertEqual(len(list(database.BACKUP_DIR.glob('finance-pre-unallocated-storage-*.db'))),1)
+
+    def test_new_ledger_has_no_storage_placeholder(self):
+        self.assertFalse(any(row['is_placeholder'] for row in self.config['storage']))
+        self.assertEqual([row['name'] for row in self.config['storage']],['活期','定期','ETF','股票'])
+
     def execution(self, start='2026-09', end='2026-11', system=None):
         return self.call('GET',f'/api/budget/execution?system_id={system or self.daily}&start_month={start}&end_month={end}')['rows']
 
