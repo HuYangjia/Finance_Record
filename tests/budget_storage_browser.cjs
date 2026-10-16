@@ -25,6 +25,7 @@ const base='http://127.0.0.1:18110';
     const save=async button=>{const response=page.waitForResponse(r=>r.request().method()==='PUT'||r.request().method()==='POST'||r.request().method()==='DELETE');await page.click(button);await response;await idle();};
     await page.goto(base+'/budgets');await text('#budget-status','已加载');await page.fill('#plan-month','2026-10');await text('#month-plans-title','2026-10');await idle();
     assert.equal(await page.locator('#matrix-scope').inputValue(),'remaining');assert.equal((await row().locator('[data-storage-total]').textContent()).trim(),'650.00');
+    assert.equal((await row().locator(`[data-storage-key="${cash}"]`).textContent()).trim(),'0.00');assert.equal((await row().locator('[data-storage-key="pending"]').textContent()).trim(),'-50.00');await text('#budget-matrix','仍有 50.00 HKD 消费待归属');
     await row().getByRole('button',{name:'管理',exact:true}).click();await page.waitForSelector('#storage-manage-dialog[open]');
     await page.selectOption('#default-storage',String(cash));await save('#save-default-storage');
     assert.equal(await row().locator(`[data-storage-key="${cash}"]`).textContent(),'-50.00');await text('#budget-matrix','有存储额度不足');

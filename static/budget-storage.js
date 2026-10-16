@@ -24,7 +24,7 @@ window.BudgetStorage = (() => {
       const foot=node('tr');foot.append(node('th','合计'));for(const k of keys)foot.append(node('td',sum(totals.get(k),places)??'未完整'));foot.append(node('th',sum(selected.map(r=>r.total),places)??'未完整'));body.append(foot);table.append(body);
       if(transpose){const cells=[...table.rows].map(r=>[...r.cells]);table.replaceChildren();const rotated=node('tbody');for(let col=0;col<cells[0].length;col++){const tr=node('tr');for(let row=0;row<cells.length;row++){const original=cells[row][col],cell=node(row===0||col===0?'th':'td','',original.className);cell.append(...original.childNodes);tr.append(cell);}rotated.append(tr);}table.append(rotated);}
       const wrap=node('div','','table-wrap');wrap.append(table);host.append(node('h3',code),wrap);
-      for(const row of selected){const notes=[];if(!row.complete)notes.push(row.reason||'消费或汇率未完整，余额暂无法确认');if(row.pending_count)notes.push(`${row.pending_count} 个消费尚未指定存储`);if(row.negative)notes.push('有存储额度不足，可手动调拨补足');if(row.funding_warnings.length)notes.push('收入来源存在待处理问题，余额仍按计划计算');if(notes.length){const p=node('p',`${row.system_name}：${notes.join('；')}。`,'storage-warning');p.append(button('管理扣款与调拨',()=>onOpen(row),'matrix-manage'));host.append(p);}}
+      for(const row of selected){const notes=[];if(!row.complete)notes.push(row.reason||'消费或汇率未完整，余额暂无法确认');if(row.pending_count)notes.push(`待分配和活期不足，仍有 ${row.pending_amount} ${row.currency_code} 消费待归属`);if(row.negative)notes.push('有存储额度不足，可手动调拨补足');if(row.funding_warnings.length)notes.push('收入来源存在待处理问题，余额仍按计划计算');if(notes.length){const p=node('p',`${row.system_name}：${notes.join('；')}。`,'storage-warning');p.append(button('管理扣款与调拨',()=>onOpen(row),'matrix-manage'));host.append(p);}}
     }
     for(const row of rows.filter(r=>!r.currency_code))host.append(node('p',`${row.system_name}：请先在设置或预案中指定预算币种。`,'subtle-note'));
     if(!rows.length)host.append(node('p','暂无可查看的预算。','plan-empty'));
@@ -65,9 +65,9 @@ window.BudgetStorage = (() => {
     if(!data.row.is_active)for(const control of content.querySelectorAll('input,select,button'))control.disabled=true;
   }
   function drawDefault(){
-    const form=newForm(),select=selectStorage(data.row.default_storage_method_id,'未指定（消费列为待归属）');select.id='default-storage';
+    const form=newForm(),select=selectStorage(data.row.default_storage_method_id,'未指定（自动扣待分配，再扣活期）');select.id='default-storage';
     const submit=node('button','保存默认扣款');submit.type='submit';submit.id='save-default-storage';
-    form.append(field('本预算默认消费存储',select),node('p','保存后，本预算所有未单独指定的消费（包括历史月份）都会按这个存储扣减。特殊消费可另选；未指定时单列待归属，预算整体结余仍照常计算。','subtle-note'),submit);
+    form.append(field('本预算默认消费存储',select),node('p','保存后，本预算所有未单独指定的消费（包括历史月份）都会按这个存储扣减。没有设置默认时，先扣待分配，再扣活期；只有余额不足的差额才保留为待归属，不自动动用定期、ETF 或股票。','subtle-note'),submit);
     form.onsubmit=e=>{e.preventDefault();act(()=>save('default',{storage_method_id:Number(select.value)||null}));};content.append(form);
   }
   function drawTransfers(){
@@ -91,7 +91,8 @@ window.BudgetStorage = (() => {
   function drawExpenses(){
     content.append(node('p',`以下为 ${month} 的普通支出及完整支出事项，AA 返还已抵扣，负金额回补存储。其他月份可关闭弹窗后切换月份查看。`,'subtle-note'));
     if(expense){
-      const form=newForm(),select=selectStorage(expense.override_storage_id,'使用本预算默认扣款');select.id='expense-storage-target';
+      const fallback=data.row.default_storage_method_id?'使用本预算默认扣款':'使用自动顺序（待分配 → 活期）';
+      const form=newForm(),select=selectStorage(expense.override_storage_id,fallback);select.id='expense-storage-target';
       const submit=node('button','保存消费归属');submit.type='submit';submit.id='save-expense-storage';
       form.append(node('strong',`${expense.date} · ${expense.title} · ${expense.amount??'未完整'} ${data.row.currency_code}`),field('扣款存储',select),submit,button('取消修改',()=>switchMode('expenses')));
       form.onsubmit=e=>{e.preventDefault();act(()=>save('expense',{entry_type:expense.entry_type,entry_id:expense.entry_id,expected_entry_token:expense.token,storage_method_id:Number(select.value)||null}));};content.append(form);
@@ -99,8 +100,10 @@ window.BudgetStorage = (() => {
     const table=node('table'),head=node('tr');for(const label of ['日期','消费 / 事项','净消费','扣款存储','操作'])head.append(node('th',label));table.append(head);
     for(const row of data.row.expenses){
       const tr=node('tr');tr.dataset.entryKey=`${row.entry_type}:${row.entry_id}`;const source=node('td'),link=node('a',row.title);link.href=row.url;link.target='_blank';link.rel='noopener';source.append(link);
-      const name=data.config.storage.find(s=>s.id===row.storage_method_id)?.path||'待归属消费';
-      tr.append(node('td',row.date),source,node('td',`${row.amount??'未完整'} ${data.row.currency_code}`),node('td',name+(row.inherited?' · 默认':' · 单独指定')));
+      const automatic=row.automatic?`自动：待分配 → ${data.row.automatic_cash_storage_id?'活期':'待归属消费'}`:'';
+      const name=data.config.storage.find(s=>s.id===row.storage_method_id)?.path||automatic||'待归属消费';
+      const rule=row.automatic?' · 自动':row.inherited?' · 默认':' · 单独指定';
+      tr.append(node('td',row.date),source,node('td',`${row.amount??'未完整'} ${data.row.currency_code}`),node('td',name+rule));
       const td=node('td');td.append(button('改归属',()=>switchMode('expenses',row)));tr.append(td);table.append(tr);
     }
     const wrap=node('div','','table-wrap');wrap.append(table);content.append(wrap);if(!data.row.expenses.length)content.append(node('p','所选月没有可单独归属的消费。跨预算事项请先整理主流水预算归属。','subtle-note'));

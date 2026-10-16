@@ -734,7 +734,7 @@ def budget_overview_export(end_month: str, start_month: str = '0001-01', system_
     sheet=book.create_sheet('存储剩余')
     sheet.append(['截至月份','预算','币种','存储方式','预算剩余','预算结转余额','说明'])
     for row in data['storage']['rows']:
-        note=row['reason'] or ('存在待归属消费，请设置默认扣款或单独归属' if row['pending_count'] else '预算额度，不代表投资市值')
+        note=row['reason'] or (f"待分配和活期不足，仍有 {row['pending_amount']} {row['currency_code']} 消费待归属" if row['pending_count'] else '预算额度，不代表投资市值')
         if not row['complete']:note+='；余额未完整计算'
         for cell in row['cells']:
             sheet.append([end_month,safe(row['system_name']),row['currency_code'],safe(cell['label']),

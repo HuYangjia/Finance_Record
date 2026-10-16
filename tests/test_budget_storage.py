@@ -49,7 +49,7 @@ class StorageTest(unittest.TestCase):
     def test_default_negative_storage_transfer_and_carry_preserve_actuals_and_funding(self):
         self.setup_plan(); self.transaction(amount='350')
         before=self.call('GET','/api/accounts')
-        self.assertEqual(self.balances()['pending'],'-350.00')
+        balances=self.balances();self.assertEqual((balances[str(self.cash)],balances['pending']),('0.00','-50.00'))
         self.write('transfers',dict(month='2026-10',source_id=self.etf,destination_id=self.cash,amount='100'),'POST',422)
         self.default(self.cash)
         self.assertEqual(self.balances()[str(self.cash)],'-50.00')
@@ -66,6 +66,24 @@ class StorageTest(unittest.TestCase):
             log=c.execute("SELECT after_json,backup_file FROM change_audit_logs WHERE entity_type='budget' ORDER BY id DESC LIMIT 1").fetchone()
             self.assertEqual(len(json.loads(log['after_json'])['storage']['budget_storage_transfers']),1)
             self.assertTrue((database.BACKUP_DIR/log['backup_file']).exists())
+
+    def test_unassigned_expense_uses_unallocated_then_cash_and_leaves_only_shortfall_pending(self):
+        cash=next(s['id'] for s in self.config['storage'] if s['name']=='活期')
+        etf=next(s['id'] for s in self.config['storage'] if s['name']=='ETF')
+        self.setup_plan(allocations=[(cash,'300'),(etf,'600')])
+        self.transaction(amount='350')
+        row=self.detail()['row'];balances=self.balances()
+        self.assertEqual((balances['unallocated'],balances[str(self.cash)],balances[str(self.etf)]),('0.00','50.00','600.00'))
+        self.assertEqual(balances['pending'],'0.00')
+        self.assertEqual((row['automatic_unallocated'],row['automatic_cash'],row['pending_amount']),('100.00','250.00','0.00'))
+        self.assertEqual((row['automatic_count'],row['pending_count']),(1,0))
+        self.assertTrue(row['expenses'][0]['automatic']);self.assertIsNone(row['expenses'][0]['storage_method_id'])
+        self.transaction(amount='100')
+        row=self.detail()['row'];balances=self.balances()
+        self.assertEqual((balances[str(self.cash)],balances['pending']),('0.00','-50.00'))
+        self.assertEqual((row['automatic_unallocated'],row['automatic_cash'],row['pending_amount']),('100.00','300.00','50.00'))
+        self.assertEqual((row['automatic_count'],row['pending_count']),(2,2))
+        self.assertEqual(row['total'],'550.00')
 
     def test_complete_aa_negative_refund_salary_excluded_override_and_dissolve(self):
         self.setup_plan();self.default(self.cash)
@@ -163,7 +181,9 @@ class StorageTest(unittest.TestCase):
         database.initialize_database();database.initialize_database()
         backups=list(database.BACKUP_DIR.glob('finance-pre-storage-balances-*.db'));self.assertEqual(len(backups),1)
         with sqlite3.connect(backups[0]) as c:self.assertEqual(c.execute('SELECT total_minor FROM budget_plans').fetchone()[0],100000)
-        row=self.detail()['row'];self.assertIsNone(row['default_storage_method_id']);self.assertEqual(row['pending_count'],1)
+        row=self.detail()['row'];self.assertIsNone(row['default_storage_method_id'])
+        self.assertEqual((row['pending_count'],row['automatic_count'],row['automatic_cash']),(0,1,'20.00'))
+        with database.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM budget_storage_expenses').fetchone()[0],0)
 
 
 if __name__=='__main__':unittest.main()
