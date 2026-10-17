@@ -188,8 +188,12 @@ class FinanceAppSmokeTest(unittest.TestCase):
                 WHERE kind = 'income' AND name = '回赠'
                 """
             ).fetchone()
-            personal_care = connection.execute(
+            living_expenses = connection.execute(
                 """SELECT sort_order FROM categories
+                   WHERE kind='expense' AND name='生活开销'"""
+            ).fetchone()
+            personal_care = connection.execute(
+                """SELECT 1 FROM categories
                    WHERE kind='expense' AND name='个人护理'"""
             ).fetchone()
             daily_shopping = connection.execute(
@@ -203,9 +207,47 @@ class FinanceAppSmokeTest(unittest.TestCase):
         self.assertEqual(payroll_category["sort_order"], 95)
         self.assertIsNotNone(cashback_category)
         self.assertEqual(cashback_category["sort_order"], 45)
-        self.assertIsNotNone(personal_care)
-        self.assertEqual(personal_care["sort_order"], 70)
+        self.assertIsNotNone(living_expenses)
+        self.assertEqual(living_expenses["sort_order"], 70)
+        self.assertIsNone(personal_care)
         self.assertIsNone(daily_shopping)
+
+    def test_personal_care_category_renames_in_place(self):
+        with database.connect() as connection:
+            category = connection.execute(
+                "SELECT id FROM categories WHERE kind='expense' AND name='生活开销'"
+            ).fetchone()['id']
+            connection.execute(
+                "UPDATE categories SET name='个人护理' WHERE id=?", (category,)
+            )
+            account = connection.execute(
+                "SELECT id FROM accounts WHERE code='CNY-BANK-01'"
+            ).fetchone()['id']
+            transaction = connection.execute(
+                '''INSERT INTO transactions(
+                    transaction_date,transaction_type,source_account_id,outflow_minor,category_id)
+                   VALUES ('2026-09-03','expense',?,2000,?)''',
+                (account, category),
+            ).lastrowid
+
+        database.initialize_database()
+        self.assertEqual(len(list(
+            database.BACKUP_DIR.glob('finance-pre-living-expense-category-*.db')
+        )),1)
+        with database.connect() as connection:
+            renamed = connection.execute(
+                'SELECT id,name,sort_order FROM categories WHERE id=?', (category,)
+            ).fetchone()
+            self.assertEqual(tuple(renamed),(category,'生活开销',70))
+            self.assertEqual(connection.execute(
+                'SELECT category_id FROM transactions WHERE id=?', (transaction,)
+            ).fetchone()[0],category)
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(),[])
+
+        database.initialize_database()
+        self.assertEqual(len(list(
+            database.BACKUP_DIR.glob('finance-pre-living-expense-category-*.db')
+        )),1)
 
     def test_daily_shopping_migration_merges_references_and_is_idempotent(self):
         with database.connect() as connection:

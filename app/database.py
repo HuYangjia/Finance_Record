@@ -35,7 +35,7 @@ CATEGORY_SEED = (
     ("expense", "学习与科研", 40),
     ("expense", "医疗与保险", 50),
     ("expense", "通信与订阅", 60),
-    ("expense", "个人护理", 70),
+    ("expense", "生活开销", 70),
     ("expense", "社交与娱乐", 80),
     ("expense", "家庭与人情", 90),
     ("expense", "工资/劳务支出", 95),
@@ -102,6 +102,12 @@ def initialize_database() -> None:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
                 with sqlite3.connect(BACKUP_DIR / f"finance-pre-category-merge-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
+            if 'categories' in tables and existing.execute(
+                    """SELECT 1 FROM categories
+                       WHERE kind='expense' AND parent_id IS NULL AND name='个人护理'""").fetchone():
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-living-expense-category-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
     with connect() as connection:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.executescript(BUDGET_SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -109,8 +115,12 @@ def initialize_database() -> None:
         from app.budget_migrations import migrate_shared_storage, migrate_unallocated_storage
         migrate_shared_storage(connection)
         migrate_unallocated_storage(connection)
-        from app.category_migrations import migrate_daily_shopping_to_groceries
+        from app.category_migrations import (
+            migrate_daily_shopping_to_groceries,
+            migrate_personal_care_to_living_expenses,
+        )
         migrate_daily_shopping_to_groceries(connection)
+        migrate_personal_care_to_living_expenses(connection)
         if 'execution_start_month' not in {r['name'] for r in connection.execute('PRAGMA table_info(budget_systems)')}:
             connection.execute('ALTER TABLE budget_systems ADD COLUMN execution_start_month TEXT')
             connection.execute('ALTER TABLE budget_systems ADD COLUMN opening_minor INTEGER NOT NULL DEFAULT 0')
