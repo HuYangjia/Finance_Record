@@ -2824,6 +2824,7 @@ def create_expense(expense: ExpenseCreate):
                 expense.budget_system_id,
             ),
         )
+        updated_account = get_account_balance_row(connection, expense.source_account_id)
 
     return {
         "id": cursor.lastrowid,
@@ -2831,6 +2832,9 @@ def create_expense(expense: ExpenseCreate):
         "account_name": account["name"],
         "currency_code": account["currency_code"],
         "amount": format_minor(amount_minor, account["decimal_places"]),
+        "account_balance": format_minor(
+            updated_account["balance_minor"], account["decimal_places"]
+        ),
         "category_name": category["name"],
         "budget_system_id": expense.budget_system_id,
     }

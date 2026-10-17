@@ -508,7 +508,9 @@ for (const [mode, target] of Object.entries(forms)) target.addEventListener("sub
     const amount = result.amount || result.outflow_amount;
     const currency = result.currency_code || result.source_currency_code;
     const viewing=state.mode;setMode(mode);
-    setStatus(`已记录 ${amount} ${currency}`, "success");
+    const balance = mode === 'expense' && result.account_balance != null
+      ? ` · ${result.account_name}余额 ${result.account_balance} ${currency}` : '';
+    setStatus(`已记录 ${amount} ${currency}${balance}`, "success");
     resetTransactionForm({ preserveExpenseAccount: mode === "expense" });
     setMode(viewing);
   } catch (error) {

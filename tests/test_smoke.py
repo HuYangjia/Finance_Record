@@ -147,6 +147,7 @@ class FinanceAppSmokeTest(unittest.TestCase):
             )
         )
         self.assertEqual(response["amount"], "12.34")
+        self.assertEqual(response["account_balance"], "-12.34")
 
         accounts = list_accounts()
         bank_account = next(account for account in accounts if account["code"] == "CNY-BANK-01")
@@ -587,6 +588,7 @@ class FinanceAppSmokeTest(unittest.TestCase):
             )
         )
         self.assertEqual(response["amount"], "50.00")
+        self.assertEqual(response["account_balance"], "50.00")
 
         accounts = list_accounts()
         card_account = next(account for account in accounts if account["code"] == "CNY-CARD-01")
