@@ -188,6 +188,14 @@ class FinanceAppSmokeTest(unittest.TestCase):
                 WHERE kind = 'income' AND name = '回赠'
                 """
             ).fetchone()
+            personal_care = connection.execute(
+                """SELECT sort_order FROM categories
+                   WHERE kind='expense' AND name='个人护理'"""
+            ).fetchone()
+            daily_shopping = connection.execute(
+                """SELECT 1 FROM categories
+                   WHERE kind='expense' AND name='日常购物'"""
+            ).fetchone()
 
         self.assertIsNotNone(food_category)
         self.assertEqual(food_category["sort_order"], 25)
@@ -195,6 +203,114 @@ class FinanceAppSmokeTest(unittest.TestCase):
         self.assertEqual(payroll_category["sort_order"], 95)
         self.assertIsNotNone(cashback_category)
         self.assertEqual(cashback_category["sort_order"], 45)
+        self.assertIsNotNone(personal_care)
+        self.assertEqual(personal_care["sort_order"], 70)
+        self.assertIsNone(daily_shopping)
+
+    def test_daily_shopping_migration_merges_references_and_is_idempotent(self):
+        with database.connect() as connection:
+            groceries = connection.execute(
+                "SELECT id FROM categories WHERE kind='expense' AND name='食品杂货'"
+            ).fetchone()['id']
+            old = connection.execute(
+                "INSERT INTO categories(kind,name,sort_order) VALUES ('expense','日常购物',70)"
+            ).lastrowid
+            child = connection.execute(
+                "INSERT INTO categories(kind,parent_id,name) VALUES ('expense',?,'旧子类')",
+                (old,),
+            ).lastrowid
+            account = connection.execute(
+                "SELECT id FROM accounts WHERE code='CNY-BANK-01'"
+            ).fetchone()['id']
+            transaction = connection.execute(
+                '''INSERT INTO transactions(
+                    transaction_date,transaction_type,source_account_id,outflow_minor,category_id)
+                   VALUES ('2026-09-01','expense',?,1000,?)''',
+                (account, old),
+            ).lastrowid
+            group = connection.execute(
+                '''INSERT INTO transaction_offset_groups(
+                    title,kind,anchor_transaction_id,statistics_date,category_id)
+                   VALUES ('旧购物','expense',?,'2026-09-01',?)''',
+                (transaction, old),
+            ).lastrowid
+            connection.executemany(
+                '''INSERT INTO monthly_budgets(
+                    budget_month,category_id,currency_code,amount_minor,note)
+                   VALUES ('2026-09-01',?,'CNY',?,?)''',
+                [(groceries, 10000, '食品'), (old, 4000, '日用品')],
+            )
+            connection.execute(
+                "INSERT INTO daily_frequent_snapshots(snapshot_date) VALUES ('2026-09-02')"
+            )
+            connection.executemany(
+                '''INSERT INTO daily_category_frequent_activity(
+                    snapshot_date,category_id,record_count,last_transaction_date)
+                   VALUES ('2026-09-02',?,?,?)''',
+                [(groceries, 2, '2026-09-01'), (old, 3, '2026-09-02')],
+            )
+            system = connection.execute(
+                "SELECT id FROM budget_systems WHERE name='日常预算'"
+            ).fetchone()['id']
+            connection.executemany(
+                '''INSERT INTO budget_assignment_rules(mode,category_id,budget_system_id)
+                   VALUES ('expense',?,?)''',
+                [(groceries, system), (old, system)],
+            )
+            preset = connection.execute(
+                '''INSERT INTO budget_entry_presets(
+                    name,mode,budget_system_id,category_id,account_id)
+                   VALUES ('旧购物预设','expense',?,?,?)''',
+                (system, old, account),
+            ).lastrowid
+            version = int(connection.execute(
+                "SELECT value FROM app_settings WHERE key='budget_config_version'"
+            ).fetchone()[0])
+
+        database.initialize_database()
+        self.assertEqual(len(list(database.BACKUP_DIR.glob('finance-pre-category-merge-*.db'))),1)
+        with database.connect() as connection:
+            self.assertFalse(connection.execute(
+                "SELECT 1 FROM categories WHERE kind='expense' AND name='日常购物'"
+            ).fetchone())
+            self.assertEqual(connection.execute(
+                'SELECT category_id FROM transactions WHERE id=?',(transaction,)
+            ).fetchone()[0],groceries)
+            migrated_group = connection.execute(
+                'SELECT category_id,version FROM transaction_offset_groups WHERE id=?',(group,)
+            ).fetchone()
+            self.assertEqual(tuple(migrated_group),(groceries,2))
+            monthly = connection.execute(
+                '''SELECT amount_minor,note FROM monthly_budgets
+                   WHERE budget_month='2026-09-01' AND category_id=? AND currency_code='CNY' ''',
+                (groceries,),
+            ).fetchone()
+            self.assertEqual(tuple(monthly),(14000,'食品；日用品'))
+            activity = connection.execute(
+                '''SELECT record_count,last_transaction_date
+                   FROM daily_category_frequent_activity
+                   WHERE snapshot_date='2026-09-02' AND category_id=?''',
+                (groceries,),
+            ).fetchone()
+            self.assertEqual(tuple(activity),(5,'2026-09-02'))
+            self.assertEqual(connection.execute(
+                'SELECT category_id FROM budget_entry_presets WHERE id=?',(preset,)
+            ).fetchone()[0],groceries)
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM budget_assignment_rules WHERE mode='expense' AND category_id=?",
+                (groceries,),
+            ).fetchone()[0],1)
+            migrated_child = connection.execute(
+                'SELECT parent_id,name FROM categories WHERE id=?',(child,)
+            ).fetchone()
+            self.assertEqual(tuple(migrated_child),(None,'旧子类'))
+            self.assertEqual(int(connection.execute(
+                "SELECT value FROM app_settings WHERE key='budget_config_version'"
+            ).fetchone()[0]),version+1)
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(),[])
+
+        database.initialize_database()
+        self.assertEqual(len(list(database.BACKUP_DIR.glob('finance-pre-category-merge-*.db'))),1)
 
     def test_daily_snapshot_drives_account_and_category_common_data(self):
         with database.connect() as connection:
