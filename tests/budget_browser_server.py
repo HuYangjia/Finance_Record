@@ -17,15 +17,19 @@ if __name__ == '__main__':
         database.BACKUP_DIR = root/'backups'
         database.initialize_database()
         with database.connect() as c:
-            for code, name, currency, kind in [
-                ('OCTOPUS-STUDENT','八达通','HKD','stored_value'),
-                ('ZABANK-HKD','ZABank（港币）','HKD','bank_demand'),
-                ('WECHAT','微信','CNY','e_wallet'),
-                ('ALIPAY','支付宝','CNY','e_wallet'),
-                ('ALIPAY-FUND','支付宝基金','CNY','investment_asset'),
+            for code, name, currency, directory, institution in [
+                ('OCTOPUS-STUDENT','八达通','HKD','stored_value','八达通'),
+                ('ZABANK-HKD','ZABank（港币）','HKD','overseas_bank','ZABank'),
+                ('WECHAT','微信','CNY','cash_wallet','微信'),
+                ('ALIPAY','支付宝','CNY','cash_wallet','支付宝'),
+                ('ALIPAY-FUND','支付宝基金','CNY','investment','支付宝'),
             ]:
                 # Use a common valid account type; the fixture tests account IDs and currencies.
-                c.execute("INSERT INTO accounts(code,name,account_class,account_type,currency_code,opening_balance_date) VALUES (?,?,'asset','bank_demand',?,'2026-01-01')",(code,name,currency))
+                c.execute("""INSERT INTO accounts(
+                    code,name,account_class,account_type,currency_code,
+                    institution,directory_key,opening_balance_date
+                ) VALUES (?,?,'asset','bank_demand',?,?,?,'2026-01-01')""",
+                    (code,name,currency,institution,directory))
             c.execute("INSERT INTO daily_cny_exchange_rates(rate_date,usd_cny_rate,hkd_cny_rate,source,market_date) VALUES ('2026-10-01','7','1','test','2026-10-01')")
             snapshot_date = today_in_shanghai().isoformat()
             c.execute(

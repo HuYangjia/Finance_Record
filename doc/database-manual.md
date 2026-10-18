@@ -18,6 +18,7 @@
 - `account_class`：`asset` 或 `liability`
 - `account_type`
 - `currency_code`：必须先存在于 `currencies`
+- `directory_key`：选择器目录，例如 `domestic_bank`、`overseas_bank` 或 `investment`
 - `opening_balance_minor`：最小货币单位金额
 - `opening_balance_date`：`YYYY-MM-DD`
 
@@ -33,10 +34,10 @@
 ```sql
 INSERT INTO accounts (
   code, name, account_class, account_type, currency_code,
-  institution, opening_balance_minor, opening_balance_date, note
+  institution, directory_key, opening_balance_minor, opening_balance_date, note
 ) VALUES (
   'HKD-BANK-01', '港币银行卡', 'asset', 'bank_demand', 'HKD',
-  '待填写', 0, '2026-01-01', ''
+  '待填写', 'overseas_bank', 0, '2026-01-01', ''
 );
 ```
 
@@ -72,7 +73,9 @@ WHERE code = 'ALIPAY-HUABEI';
 
 - 账户同时统计最近 45 天和最近 14 天，排序分数为“45 天笔数 + 14 天笔数 × 5”；同分时依次比较 14 天笔数、45 天笔数和最近使用日期。这样长期习惯提供稳定性，近期变化占更大权重。
 - 分类统计最近 45 天和 14 天，分数为“45 天笔数 + 14 天笔数 × 5”，再比较短窗口笔数、长窗口笔数和最近日期。收入与支出分类分别计算。
-- 账户没有对应窗口内流水时仍在“其他账户”中；分类没有近期流水时仍保留在连续列表末尾，不会被隐藏。
+- 账户没有对应窗口内流水时仍在“全部账户”的业务目录中；分类没有近期流水时仍保留在连续列表末尾，不会被隐藏。
+
+账户的 `directory_key` 决定“全部账户”中的一级目录，`institution` 作为第二级，账户作为第三级。内置目录保存在 `account_directories`，包括国内银行、香港及境外银行、投资、现金与电子钱包、交通与储值、负债及其他账户。目录只影响选择器位置，不影响账户类型、余额或统计。新增账户若暂未填写有效目录，接口会将它显示在“其他账户”。
 
 账户明细页首次打开以及首页支出表单刷新时，会默认选中各自语义下优先级最高的启用账户。支出表单使用“支出来源”频率，不再固定选择某个账户。
 

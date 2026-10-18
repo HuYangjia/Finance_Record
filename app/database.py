@@ -43,6 +43,16 @@ CATEGORY_SEED = (
     ("expense", "其他", 110),
 )
 
+ACCOUNT_DIRECTORY_SEED = (
+    ("domestic_bank", "国内银行账户", 10),
+    ("overseas_bank", "香港及境外银行账户", 20),
+    ("investment", "投资账户", 30),
+    ("cash_wallet", "现金与电子钱包", 40),
+    ("stored_value", "交通与储值账户", 50),
+    ("liability", "负债账户", 60),
+    ("other", "其他账户", 90),
+)
+
 
 def connect() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -56,6 +66,11 @@ def initialize_database() -> None:
     if DATABASE_PATH.exists():
         with sqlite3.connect(DATABASE_PATH) as existing:
             tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if 'accounts' in tables and 'directory_key' not in {
+                    r[1] for r in existing.execute('PRAGMA table_info(accounts)')}:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-account-directories-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
             if 'daily_category_frequent_activity' in tables and 'recent_record_count' not in {
                     r[1] for r in existing.execute('PRAGMA table_info(daily_category_frequent_activity)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -131,6 +146,7 @@ def initialize_database() -> None:
         )
         migrate_daily_shopping_to_groceries(connection)
         migrate_personal_care_to_living_expenses(connection)
+        migrate_account_directories(connection)
         if 'execution_start_month' not in {r['name'] for r in connection.execute('PRAGMA table_info(budget_systems)')}:
             connection.execute('ALTER TABLE budget_systems ADD COLUMN execution_start_month TEXT')
             connection.execute('ALTER TABLE budget_systems ADD COLUMN opening_minor INTEGER NOT NULL DEFAULT 0')
@@ -190,6 +206,54 @@ def initialize_database() -> None:
             connection.execute("INSERT INTO app_settings(key,value) VALUES ('daily_expense_budget_system_id',?)", (str(daily_id),))
             connection.execute("UPDATE app_settings SET value=CAST(value AS INTEGER)+1 WHERE key='budget_config_version'")
         initialize_entry_shortcuts(connection)
+
+
+def migrate_account_directories(connection: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(accounts)").fetchall()
+    }
+    added_directory_column = "directory_key" not in columns
+    if added_directory_column:
+        connection.execute(
+            """
+            ALTER TABLE accounts
+            ADD COLUMN directory_key TEXT
+                REFERENCES account_directories(key) ON DELETE RESTRICT
+            """
+        )
+
+    connection.executemany(
+        """
+        INSERT OR IGNORE INTO account_directories(key, name, sort_order)
+        VALUES (?, ?, ?)
+        """,
+        ACCOUNT_DIRECTORY_SEED,
+    )
+    if added_directory_column:
+        connection.execute(
+            """
+            UPDATE accounts
+            SET directory_key = CASE
+                WHEN account_class = 'liability' THEN 'liability'
+                WHEN account_type IN ('investment_asset', 'broker_cash')
+                    THEN 'investment'
+                WHEN account_type IN ('cash', 'e_wallet') THEN 'cash_wallet'
+                WHEN account_type IN ('transit_card', 'prepaid_card')
+                    THEN 'stored_value'
+                WHEN account_type = 'bank_demand'
+                 AND institution IN (
+                    '中国建设银行', '中国银行', '中国农业银行', '中国工商银行'
+                 ) THEN 'domestic_bank'
+                WHEN account_type = 'bank_demand'
+                 AND institution IN (
+                    'ZABank', '中国银行（香港）', '恒生银行', '汇丰银行'
+                 ) THEN 'overseas_bank'
+                ELSE 'other'
+            END
+            WHERE directory_key IS NULL
+            """
+        )
 
 
 def migrate_change_audit_logs(connection: sqlite3.Connection) -> None:

@@ -1273,6 +1273,7 @@ def month_sequence(start_month: str, end_month: str) -> list[str]:
 
 def serialize_account(row) -> dict[str, Any]:
     decimal_places = get_currency_decimal_places_for_row(row)
+    row_keys = set(row.keys())
     return {
         "id": row["id"],
         "code": row["code"],
@@ -1281,6 +1282,22 @@ def serialize_account(row) -> dict[str, Any]:
         "account_type": row["account_type"],
         "currency_code": row["currency_code"],
         "institution": row["institution"],
+        "directory_key": (
+            row["directory_key"]
+            if "directory_key" in row_keys and row["directory_key"]
+            else "other"
+        ),
+        "directory_name": (
+            row["directory_name"]
+            if "directory_name" in row_keys and row["directory_name"]
+            else "其他账户"
+        ),
+        "directory_sort_order": (
+            row["directory_sort_order"]
+            if "directory_sort_order" in row_keys
+            and row["directory_sort_order"] is not None
+            else 90
+        ),
         "is_active": bool(row["is_active"]),
         "balance": format_minor(row["balance_minor"], decimal_places),
         "balance_minor": row["balance_minor"],
@@ -1707,9 +1724,15 @@ def list_accounts(include_inactive: bool = False):
         active_clause = "" if include_inactive else "WHERE account_balances.is_active = 1"
         rows = connection.execute(
             f"""
-            SELECT account_balances.*, currencies.decimal_places
+            SELECT account_balances.*, currencies.decimal_places,
+                   account_source.directory_key,
+                   account_directories.name AS directory_name,
+                   account_directories.sort_order AS directory_sort_order
             FROM account_balances
             JOIN currencies ON currencies.code = account_balances.currency_code
+            JOIN accounts AS account_source ON account_source.id = account_balances.id
+            LEFT JOIN account_directories
+              ON account_directories.key = account_source.directory_key
             {active_clause}
             ORDER BY account_balances.currency_code,
                      account_balances.account_class,
@@ -2315,9 +2338,15 @@ def list_investment_accounts():
     with connect() as connection:
         rows = connection.execute(
             """
-            SELECT account_balances.*, currencies.decimal_places
+            SELECT account_balances.*, currencies.decimal_places,
+                   account_source.directory_key,
+                   account_directories.name AS directory_name,
+                   account_directories.sort_order AS directory_sort_order
             FROM account_balances
             JOIN currencies ON currencies.code = account_balances.currency_code
+            JOIN accounts AS account_source ON account_source.id = account_balances.id
+            LEFT JOIN account_directories
+              ON account_directories.key = account_source.directory_key
             WHERE account_balances.account_class = 'asset'
               AND account_balances.account_type IN ('investment_asset', 'broker_cash')
             ORDER BY account_balances.is_active DESC, account_balances.currency_code,

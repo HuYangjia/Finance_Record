@@ -36,9 +36,9 @@
     );
   }
 
-  function optionButton(option, selectOption) {
+  function optionButton(option, selectOption, className = "") {
     const button = document.createElement("button");
-    button.className = "frequent-picker-option";
+    button.className = `frequent-picker-option ${className}`.trim();
     button.type = "button";
     button.textContent = option.textContent;
     button.dataset.value = option.value;
@@ -70,6 +70,8 @@
     const menu = document.createElement("div");
     let required = originalRequired;
     let otherExpanded = false;
+    const expandedDirectories = new Set();
+    const expandedInstitutions = new Set();
 
     wrapper.className = "frequent-picker";
     trigger.className = "frequent-picker-trigger";
@@ -89,6 +91,9 @@
     function close() {
       menu.hidden = true;
       trigger.setAttribute("aria-expanded", "false");
+      otherExpanded = false;
+      expandedDirectories.clear();
+      expandedInstitutions.clear();
       openPickers.delete(controller);
     }
 
@@ -128,13 +133,151 @@
         ));
     }
 
+    function directoryRecord(option, index) {
+      return {
+        option,
+        index,
+        directoryKey: option.dataset.directoryKey || "other",
+        directoryName: option.dataset.directoryName || "其他账户",
+        directoryOrder: Number(option.dataset.directoryOrder) || 90,
+        institution: option.dataset.institution || "其他机构",
+        currency: option.dataset.currency || "",
+      };
+    }
+
+    function institutionKey(directoryKey, institution) {
+      return `${directoryKey}/${encodeURIComponent(institution)}`;
+    }
+
+    function directoryRecords() {
+      return Array.from(select.options)
+        .filter((option) => option.value !== "")
+        .map(directoryRecord)
+        .sort((left, right) => (
+          left.directoryOrder - right.directoryOrder
+          || left.directoryName.localeCompare(right.directoryName, "zh-CN")
+          || (left.institution === "其他机构" ? 1 : 0)
+          - (right.institution === "其他机构" ? 1 : 0)
+          || left.institution.localeCompare(right.institution, "zh-CN")
+          || left.currency.localeCompare(right.currency)
+          || left.option.textContent.localeCompare(right.option.textContent, "zh-CN")
+          || left.index - right.index
+        ));
+    }
+
+    function directoryToggle({ label, count, expanded, className, dataset, onToggle }) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `frequent-picker-directory-toggle ${className}`;
+      button.setAttribute("aria-expanded", String(expanded));
+      Object.assign(button.dataset, dataset);
+      const marker = document.createElement("span");
+      marker.className = "frequent-picker-directory-marker";
+      marker.textContent = expanded ? "▾" : "▸";
+      const name = document.createElement("span");
+      name.textContent = label;
+      const total = document.createElement("small");
+      total.textContent = String(count);
+      button.append(marker, name, total);
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        onToggle();
+      });
+      return button;
+    }
+
+    function appendAccountDirectories(records) {
+      const heading = document.createElement("p");
+      heading.className = "frequent-picker-group-label frequent-picker-all-label";
+      heading.textContent = "全部账户";
+      menu.append(heading);
+
+      const directories = new Map();
+      for (const record of records) {
+        if (!directories.has(record.directoryKey)) {
+          directories.set(record.directoryKey, {
+            key: record.directoryKey,
+            name: record.directoryName,
+            records: [],
+          });
+        }
+        directories.get(record.directoryKey).records.push(record);
+      }
+
+      for (const directory of directories.values()) {
+        const directoryExpanded = expandedDirectories.has(directory.key);
+        menu.append(directoryToggle({
+          label: directory.name,
+          count: directory.records.length,
+          expanded: directoryExpanded,
+          className: "is-directory",
+          dataset: { directoryKey: directory.key },
+          onToggle: () => {
+            if (directoryExpanded) expandedDirectories.delete(directory.key);
+            else expandedDirectories.add(directory.key);
+            renderMenu();
+            menu.querySelector(
+              `[data-directory-key="${CSS.escape(directory.key)}"]`,
+            )?.focus();
+          },
+        }));
+        if (!directoryExpanded) continue;
+
+        const institutions = new Map();
+        for (const record of directory.records) {
+          if (!institutions.has(record.institution)) institutions.set(record.institution, []);
+          institutions.get(record.institution).push(record);
+        }
+        for (const [institution, institutionRecords] of institutions) {
+          const key = institutionKey(directory.key, institution);
+          const institutionExpanded = expandedInstitutions.has(key);
+          menu.append(directoryToggle({
+            label: institution,
+            count: institutionRecords.length,
+            expanded: institutionExpanded,
+            className: "is-institution",
+            dataset: { institutionKey: key },
+            onToggle: () => {
+              if (institutionExpanded) expandedInstitutions.delete(key);
+              else expandedInstitutions.add(key);
+              renderMenu();
+              menu.querySelector(
+                `[data-institution-key="${CSS.escape(key)}"]`,
+              )?.focus();
+            },
+          }));
+          if (!institutionExpanded) continue;
+          for (const record of institutionRecords) {
+            menu.append(optionButton(record.option, choose, "is-directory-account"));
+          }
+        }
+      }
+    }
+
+    function expandSelectedDirectory(commonValues) {
+      const selected = selectedOption();
+      if (!selected || !selected.value || commonValues.has(selected.value)) return;
+      const record = directoryRecord(selected, 0);
+      expandedDirectories.add(record.directoryKey);
+      expandedInstitutions.add(
+        institutionKey(record.directoryKey, record.institution),
+      );
+    }
+
     function renderMenu() {
       menu.replaceChildren();
       const allOptions = Array.from(select.options);
       const emptyOption = allOptions.find((option) => option.value === "");
       const records = allOptions.filter((option) => option.value !== "");
+      wrapper.classList.toggle(
+        "is-ranked-scroll",
+        configuration.displayMode === "ranked-scroll",
+      );
+      wrapper.classList.toggle(
+        "is-account-directory",
+        configuration.displayMode === "account-directory",
+      );
       if (configuration.displayMode === "ranked-scroll") {
-        wrapper.classList.add("is-ranked-scroll");
         menu.style.setProperty("--picker-visible-rows", configuration.visibleRows);
         if (emptyOption && !emptyOption.disabled) {
           menu.append(optionButton(emptyOption, choose));
@@ -144,12 +287,21 @@
         }
         return;
       }
-      wrapper.classList.remove("is-ranked-scroll");
       menu.style.removeProperty("--picker-visible-rows");
       const common = rankedRecords()
         .slice(0, configuration.commonLimit)
         .map((item) => item.option);
       const commonValues = new Set(common.map((option) => option.value));
+
+      if (configuration.displayMode === "account-directory") {
+        if (emptyOption && !emptyOption.disabled) {
+          menu.append(optionButton(emptyOption, choose));
+        }
+        appendGroup(configuration.commonLabel, common);
+        appendAccountDirectories(directoryRecords());
+        return;
+      }
+
       const other = records.filter((option) => !commonValues.has(option.value));
 
       if (emptyOption && !emptyOption.disabled) {
@@ -198,6 +350,13 @@
         if (picker !== controller) {
           picker.close();
         }
+      }
+      if (configuration.displayMode === "account-directory") {
+        const commonValues = new Set(
+          rankedRecords().slice(0, configuration.commonLimit)
+            .map((item) => item.option.value),
+        );
+        expandSelectedDirectory(commonValues);
       }
       renderMenu();
       menu.hidden = false;
@@ -255,8 +414,6 @@
       }
       event.preventDefault();
       open();
-      const firstOption = menu.querySelector("button:not(:disabled)");
-      firstOption?.focus();
     });
     wrapper.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {

@@ -193,6 +193,13 @@ function setSelectOptions(select, records, placeholder, displayName, disabledPla
     option.value = record.id;
     option.textContent = displayName(record);
     option.dataset.activity = JSON.stringify(record.activity || {});
+    if (record.directory_key) {
+      option.dataset.directoryKey = record.directory_key;
+      option.dataset.directoryName = record.directory_name || "其他账户";
+      option.dataset.directoryOrder = record.directory_sort_order ?? 90;
+      option.dataset.institution = record.institution || "其他机构";
+      option.dataset.currency = record.currency_code || "";
+    }
     select.append(option);
   }
 }
@@ -205,8 +212,8 @@ function initializeFrequentPickers() {
     editorDestinationSelect,
   ]) {
     window.createFrequentPicker(select, {
-      commonLabel: "常用账户",
-      otherLabel: "账户",
+      commonLabel: "优先账户",
+      displayMode: "account-directory",
       activityKey: "overall",
     });
   }

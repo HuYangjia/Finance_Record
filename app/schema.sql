@@ -9,6 +9,12 @@ CREATE TABLE IF NOT EXISTS currencies (
     is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))
 );
 
+CREATE TABLE IF NOT EXISTS account_directories (
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0),
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS accounts (
     id INTEGER PRIMARY KEY,
     code TEXT NOT NULL UNIQUE,
@@ -17,6 +23,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     account_type TEXT NOT NULL,
     currency_code TEXT NOT NULL REFERENCES currencies(code) ON UPDATE CASCADE,
     institution TEXT,
+    directory_key TEXT REFERENCES account_directories(key) ON DELETE RESTRICT,
     opening_balance_minor INTEGER NOT NULL DEFAULT 0 CHECK (opening_balance_minor >= 0),
     opening_balance_date TEXT NOT NULL,
     is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
