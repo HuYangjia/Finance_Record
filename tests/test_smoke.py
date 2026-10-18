@@ -658,6 +658,7 @@ class FinanceAppSmokeTest(unittest.TestCase):
             )
         )
         self.assertEqual(income["amount"], "100.00")
+        self.assertEqual(income["account_balance"], "100.00")
 
         transfer = create_transfer(
             TransferCreate(
@@ -669,6 +670,8 @@ class FinanceAppSmokeTest(unittest.TestCase):
         )
         self.assertEqual(transfer["transaction_type"], "transfer")
         self.assertEqual(transfer["inflow_amount"], "30.00")
+        self.assertEqual(transfer["source_account_balance"], "70.00")
+        self.assertEqual(transfer["destination_account_balance"], "30.00")
 
         exchange = create_transfer(
             TransferCreate(
@@ -681,6 +684,8 @@ class FinanceAppSmokeTest(unittest.TestCase):
         )
         self.assertEqual(exchange["transaction_type"], "fx_exchange")
         self.assertEqual(exchange["inflow_amount"], "11.20")
+        self.assertEqual(exchange["source_account_balance"], "20.00")
+        self.assertEqual(exchange["destination_account_balance"], "11.20")
 
         balances = {account["code"]: account["balance"] for account in list_accounts()}
         self.assertEqual(balances["CNY-BANK-01"], "70.00")

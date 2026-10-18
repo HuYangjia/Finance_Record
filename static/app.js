@@ -481,6 +481,18 @@ function buildPayload() {
   return { endpoint: "/api/transfers", payload };
 }
 
+function successMessage(mode, result) {
+  if (mode === "transfer") {
+    const movement = `${result.outflow_amount} ${result.source_currency_code} → ${result.inflow_amount} ${result.destination_currency_code}`;
+    const sourceBalance = `${result.source_account_name}余额 ${result.source_account_balance} ${result.source_currency_code}`;
+    const destinationBalance = `${result.destination_account_name}余额 ${result.destination_account_balance} ${result.destination_currency_code}`;
+    return `已记录 ${movement} · ${sourceBalance} · ${destinationBalance}`;
+  }
+
+  const accountBalance = `${result.account_name}余额 ${result.account_balance} ${result.currency_code}`;
+  return `已记录 ${result.amount} ${result.currency_code} · ${accountBalance}`;
+}
+
 for (const button of document.querySelectorAll(".entry-mode")) {
   button.addEventListener("click", () => {
     setMode(button.dataset.mode);
@@ -511,12 +523,8 @@ for (const [mode, target] of Object.entries(forms)) target.addEventListener("sub
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const amount = result.amount || result.outflow_amount;
-    const currency = result.currency_code || result.source_currency_code;
     const viewing=state.mode;setMode(mode);
-    const balance = mode === 'expense' && result.account_balance != null
-      ? ` · ${result.account_name}余额 ${result.account_balance} ${currency}` : '';
-    setStatus(`已记录 ${amount} ${currency}${balance}`, "success");
+    setStatus(successMessage(mode, result), "success");
     resetTransactionForm({ preserveExpenseAccount: mode === "expense" });
     setMode(viewing);
   } catch (error) {

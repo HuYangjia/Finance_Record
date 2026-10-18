@@ -2916,6 +2916,7 @@ def create_income(income: IncomeCreate):
                 income.budget_system_id,
             ),
         )
+        updated_account = get_account_balance_row(connection, income.destination_account_id)
 
     return {
         "id": cursor.lastrowid,
@@ -2923,6 +2924,9 @@ def create_income(income: IncomeCreate):
         "account_name": account["name"],
         "currency_code": account["currency_code"],
         "amount": format_minor(amount_minor, account["decimal_places"]),
+        "account_balance": format_minor(
+            updated_account["balance_minor"], account["decimal_places"]
+        ),
         "category_name": category["name"],
         "budget_system_id": income.budget_system_id,
     }
@@ -2993,6 +2997,12 @@ def create_transfer(transfer: TransferCreate):
                 clean_optional_text(transfer.note),
             ),
         )
+        updated_source_account = get_account_balance_row(
+            connection, transfer.source_account_id
+        )
+        updated_destination_account = get_account_balance_row(
+            connection, transfer.destination_account_id
+        )
 
     return {
         "id": cursor.lastrowid,
@@ -3002,9 +3012,16 @@ def create_transfer(transfer: TransferCreate):
         "source_account_name": source_account["name"],
         "source_currency_code": source_account["currency_code"],
         "outflow_amount": format_minor(outflow_minor, source_account["decimal_places"]),
+        "source_account_balance": format_minor(
+            updated_source_account["balance_minor"], source_account["decimal_places"]
+        ),
         "destination_account_name": destination_account["name"],
         "destination_currency_code": destination_account["currency_code"],
         "inflow_amount": format_minor(inflow_minor, destination_account["decimal_places"]),
+        "destination_account_balance": format_minor(
+            updated_destination_account["balance_minor"],
+            destination_account["decimal_places"],
+        ),
     }
 
 
