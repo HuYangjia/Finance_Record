@@ -211,6 +211,8 @@ Excel 导出至少包含：月度总览、账户余额、交易流水、月度�
 
 实际流水新增可空的预算归属，第三页可按日常、专项等预算筛选。默认预算、分类映射、命名工资预设和栏目管理放入独立 `/settings`；首页支出、入账、转账采用独立表单与草稿。详细规则见 [budget-attribution-and-settings-design.md](budget-attribution-and-settings-design.md)。预算筛选影响查询明细、汇总和图表，不改变原始余额和收支算法。
 
+2026-10-18 已完成下一轮电脑端交互设计，等待实现：支出、收入分类将采用与账户相同的 45 天 / 14 天加权排序，在固定 8 行菜单中连续滚动；首页硬编码便捷按钮将迁移为设置页可维护的支出、入账和转账 / 换汇模板。该设计不改变流水及统计口径，详见 [category-picker-and-entry-shortcuts-design.md](category-picker-and-entry-shortcuts-design.md)。
+
 `app/budget_schema.sql` 定义预算系统、用途、存储方式、月计划、明细、版本、映射及预设表。`app/budgets.py` 提供独立路由与事务校验，设置和计划写入复用全库备份与 `budget` 审计；`static/budgets.*` 和 `static/settings.*` 提供管理界面。每系统、月份和币种仅一份当前计划，历史快照不参与累计。首次迁移先创建 `finance-pre-budget-*.db`，旧流水新增字段保持 NULL。
 
 总额与分配模型复用已有表。`budget_plans.total_minor` 保存父级总额，`budget_plan_items` 保存二级存储分配；旧 `purpose_id` 保留，新分配默认使用所属系统的占位标签，编辑旧明细时保留原标签。单币种接口通过 `allocation_mode=true` 校验总额及分配上限，兼容旧请求；当前页面使用下述月度接口，强制执行同一校验。新增 `/api/budget/overview` 与 `/api/budget/overview.xlsx` 按系统、币种、区间返回各份总额、分配和待分配，并分别累计。旧总额为空时只在查询时以明细合计代替；不回填、不静默修正旧超额计划。
