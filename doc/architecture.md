@@ -215,7 +215,7 @@ Excel 导出至少包含：月度总览、账户余额、交易流水、月度�
 
 `transaction_entry_shortcuts` 保存首页支出、入账和转账 / 换汇预填模板；`app/entry_shortcuts.py` 提供读取、增删改、启停和完整排序接口。设置页用卡片和弹窗维护，写入采用 `app_settings` 乐观版本、全库备份和 `entry_shortcut` 审计。模板只预填既有表单，不写流水、不参与余额或统计；引用对象失效时首页按钮禁用。详细规则见 [category-picker-and-entry-shortcuts-design.md](category-picker-and-entry-shortcuts-design.md)。
 
-`account_directories` 保存账户选择器的稳定业务目录，`accounts.directory_key` 保存归属，现有 `institution` 作为第二级。账户单选组件顶部仍按角色显示最多 6 个近期优先账户，下方目录重新包含全部可选账户；目录元数据不参与余额、资产负债、投资或流水统计。详细规则见 [account-picker-directory-design.md](account-picker-directory-design.md)。
+`account_directories` 保存账户选择器的稳定业务目录，`accounts.directory_key` 保存归属。账户单选组件顶部仍按角色显示最多 6 个近期优先账户，下方按“业务目录 → 账户”两级重新包含全部可选账户；现有 `institution` 只参与迁移判断和目录内排序，目录元数据不参与余额、资产负债、投资或流水统计。详细规则见 [account-picker-directory-design.md](account-picker-directory-design.md)。
 
 `app/budget_schema.sql` 定义预算系统、用途、存储方式、月计划、明细、版本、映射及预设表。`app/budgets.py` 提供独立路由与事务校验，设置和计划写入复用全库备份与 `budget` 审计；`static/budgets.*` 和 `static/settings.*` 提供管理界面。每系统、月份和币种仅一份当前计划，历史快照不参与累计。首次迁移先创建 `finance-pre-budget-*.db`，旧流水新增字段保持 NULL。
 

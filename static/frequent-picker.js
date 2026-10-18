@@ -71,7 +71,6 @@
     let required = originalRequired;
     let otherExpanded = false;
     const expandedDirectories = new Set();
-    const expandedInstitutions = new Set();
 
     wrapper.className = "frequent-picker";
     trigger.className = "frequent-picker-trigger";
@@ -93,7 +92,6 @@
       trigger.setAttribute("aria-expanded", "false");
       otherExpanded = false;
       expandedDirectories.clear();
-      expandedInstitutions.clear();
       openPickers.delete(controller);
     }
 
@@ -143,10 +141,6 @@
         institution: option.dataset.institution || "其他机构",
         currency: option.dataset.currency || "",
       };
-    }
-
-    function institutionKey(directoryKey, institution) {
-      return `${directoryKey}/${encodeURIComponent(institution)}`;
     }
 
     function directoryRecords() {
@@ -223,33 +217,8 @@
         }));
         if (!directoryExpanded) continue;
 
-        const institutions = new Map();
         for (const record of directory.records) {
-          if (!institutions.has(record.institution)) institutions.set(record.institution, []);
-          institutions.get(record.institution).push(record);
-        }
-        for (const [institution, institutionRecords] of institutions) {
-          const key = institutionKey(directory.key, institution);
-          const institutionExpanded = expandedInstitutions.has(key);
-          menu.append(directoryToggle({
-            label: institution,
-            count: institutionRecords.length,
-            expanded: institutionExpanded,
-            className: "is-institution",
-            dataset: { institutionKey: key },
-            onToggle: () => {
-              if (institutionExpanded) expandedInstitutions.delete(key);
-              else expandedInstitutions.add(key);
-              renderMenu();
-              menu.querySelector(
-                `[data-institution-key="${CSS.escape(key)}"]`,
-              )?.focus();
-            },
-          }));
-          if (!institutionExpanded) continue;
-          for (const record of institutionRecords) {
-            menu.append(optionButton(record.option, choose, "is-directory-account"));
-          }
+          menu.append(optionButton(record.option, choose, "is-directory-account"));
         }
       }
     }
@@ -259,9 +228,6 @@
       if (!selected || !selected.value || commonValues.has(selected.value)) return;
       const record = directoryRecord(selected, 0);
       expandedDirectories.add(record.directoryKey);
-      expandedInstitutions.add(
-        institutionKey(record.directoryKey, record.institution),
-      );
     }
 
     function renderMenu() {

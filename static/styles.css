@@ -562,13 +562,6 @@ textarea {
   width: 100%;
 }
 
-.frequent-picker-directory-toggle.is-institution {
-  color: #5b6873;
-  font-size: 12px;
-  font-weight: 500;
-  padding-left: 20px;
-}
-
 .frequent-picker-directory-toggle small {
   color: #819089;
   font-size: 11px;
@@ -584,7 +577,7 @@ textarea {
 }
 
 .frequent-picker-option.is-directory-account {
-  padding-left: 38px;
+  padding-left: 24px;
 }
 
 textarea {
