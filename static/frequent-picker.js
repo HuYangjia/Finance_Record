@@ -42,6 +42,7 @@
     button.type = "button";
     button.textContent = option.textContent;
     button.dataset.value = option.value;
+    button.disabled = option.disabled;
     button.classList.toggle("is-selected", option.selected);
     button.addEventListener("click", () => selectOption(option.value));
     return button;
@@ -59,6 +60,8 @@
       otherLabel: "其他选项",
       commonLimit: 6,
       activityKey: "overall",
+      displayMode: "common-other",
+      visibleRows: 8,
       ...options,
     };
     const originalRequired = select.required;
@@ -110,7 +113,7 @@
       }
     }
 
-    function rankedRecords() {
+    function rankedRecords(usedOnly = true) {
       return Array.from(select.options)
         .filter((option) => option.value !== "")
         .map((option, index) => ({
@@ -118,7 +121,7 @@
           index,
           activity: optionActivity(option, configuration.activityKey),
         }))
-        .filter((item) => item.activity.record_count > 0)
+        .filter((item) => !usedOnly || item.activity.record_count > 0)
         .sort((left, right) => (
           compareActivity(left.activity, right.activity)
           || left.index - right.index
@@ -130,6 +133,19 @@
       const allOptions = Array.from(select.options);
       const emptyOption = allOptions.find((option) => option.value === "");
       const records = allOptions.filter((option) => option.value !== "");
+      if (configuration.displayMode === "ranked-scroll") {
+        wrapper.classList.add("is-ranked-scroll");
+        menu.style.setProperty("--picker-visible-rows", configuration.visibleRows);
+        if (emptyOption && !emptyOption.disabled) {
+          menu.append(optionButton(emptyOption, choose));
+        }
+        for (const item of rankedRecords(false)) {
+          menu.append(optionButton(item.option, choose));
+        }
+        return;
+      }
+      wrapper.classList.remove("is-ranked-scroll");
+      menu.style.removeProperty("--picker-visible-rows");
       const common = rankedRecords()
         .slice(0, configuration.commonLimit)
         .map((item) => item.option);
@@ -187,6 +203,13 @@
       menu.hidden = false;
       trigger.setAttribute("aria-expanded", "true");
       openPickers.add(controller);
+      const selected = selectedOption();
+      const selectedButton = selected
+        ? menu.querySelector(`[data-value="${CSS.escape(selected.value)}"]`)
+        : null;
+      const firstOption = menu.querySelector("button:not(:disabled)");
+      (selectedButton || firstOption)?.focus();
+      selectedButton?.scrollIntoView({ block: "nearest" });
     }
 
     function validate() {

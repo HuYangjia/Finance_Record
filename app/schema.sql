@@ -160,7 +160,8 @@ CREATE TABLE IF NOT EXISTS change_audit_logs (
             'investment_valuation',
             'exchange_rate',
             'offset_group',
-            'budget'
+            'budget',
+            'entry_shortcut'
         )
     ),
     entity_id INTEGER,
@@ -251,7 +252,7 @@ CREATE INDEX IF NOT EXISTS daily_cny_exchange_rates_date_index
 
 CREATE TABLE IF NOT EXISTS daily_frequent_snapshots (
     snapshot_date TEXT PRIMARY KEY,
-    rules_version INTEGER NOT NULL DEFAULT 2,
+    rules_version INTEGER NOT NULL DEFAULT 3,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -283,6 +284,7 @@ CREATE TABLE IF NOT EXISTS daily_category_frequent_activity (
         REFERENCES daily_frequent_snapshots(snapshot_date) ON DELETE CASCADE,
     category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
     record_count INTEGER NOT NULL CHECK (record_count > 0),
+    recent_record_count INTEGER NOT NULL DEFAULT 0 CHECK (recent_record_count >= 0),
     last_transaction_date TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (snapshot_date, category_id)
@@ -296,6 +298,49 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS transaction_entry_shortcuts (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0),
+    mode TEXT NOT NULL CHECK (mode IN ('expense', 'income', 'transfer')),
+    source_account_id INTEGER REFERENCES accounts(id) ON DELETE RESTRICT,
+    destination_account_id INTEGER REFERENCES accounts(id) ON DELETE RESTRICT,
+    category_id INTEGER REFERENCES categories(id) ON DELETE RESTRICT,
+    budget_system_id INTEGER REFERENCES budget_systems(id) ON DELETE RESTRICT,
+    outflow_minor INTEGER CHECK (outflow_minor > 0),
+    inflow_minor INTEGER CHECK (inflow_minor > 0),
+    counterparty TEXT,
+    note TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (source_account_id IS NULL OR destination_account_id IS NULL
+           OR source_account_id != destination_account_id),
+    CHECK (
+        (mode = 'expense'
+         AND source_account_id IS NOT NULL
+         AND destination_account_id IS NULL
+         AND category_id IS NOT NULL
+         AND inflow_minor IS NULL)
+        OR
+        (mode = 'income'
+         AND source_account_id IS NULL
+         AND destination_account_id IS NOT NULL
+         AND category_id IS NOT NULL
+         AND outflow_minor IS NULL)
+        OR
+        (mode = 'transfer'
+         AND source_account_id IS NOT NULL
+         AND destination_account_id IS NOT NULL
+         AND category_id IS NULL
+         AND budget_system_id IS NULL
+         AND counterparty IS NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS transaction_entry_shortcuts_order_index
+    ON transaction_entry_shortcuts(is_active DESC, sort_order, id);
 
 CREATE TRIGGER IF NOT EXISTS validate_transaction_category_before_insert
 BEFORE INSERT ON transactions

@@ -48,9 +48,10 @@ def _merge_category_references(connection, source_id, target_id):
         if existing:
             connection.execute(
                 '''UPDATE daily_category_frequent_activity
-                   SET record_count=?,last_transaction_date=?
+                   SET record_count=?,recent_record_count=?,last_transaction_date=?
                    WHERE snapshot_date=? AND category_id=?''',
                 (existing['record_count'] + row['record_count'],
+                 existing['recent_record_count'] + row['recent_record_count'],
                  max(existing['last_transaction_date'], row['last_transaction_date']),
                  row['snapshot_date'], target_id),
             )

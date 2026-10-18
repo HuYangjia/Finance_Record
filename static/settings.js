@@ -38,7 +38,7 @@
     }
     if(!rows.length)target.append(node('p','暂无项目，点击“新增”创建。'));
   }
-  function refreshCategory(selected=''){options($('setting-category'),categories.filter(c=>c.kind===$('setting-mode').value&&c.is_active),'不预填分类',selected);}
+  function refreshCategory(selected=''){options($('setting-category'),categories.filter(c=>c.kind===$('setting-mode').value&&c.is_active),'不预填分类',selected);window.refreshFrequentPickers($('setting-form'));}
   function refreshParent(selected=''){
     const rows=config[editCollection]||[];
     const descendants=new Set(editing?[editing.id]:[]);let changed=true;
@@ -52,7 +52,7 @@
     document.querySelectorAll('[data-setting]').forEach(e=>{e.hidden=!fields.has(e.dataset.setting);for(const i of e.querySelectorAll('input,select'))i.disabled=e.hidden;});
     options($('setting-system'),config.systems.filter(s=>s.is_active||s.id===row?.budget_system_id),null,row?.budget_system_id||$('settings-system').value||config.systems[0]?.id);
     if(dimension&&row)$('setting-system').disabled=true;
-    $('setting-name').required=fields.has('name');$('setting-category').required=key==='rules';
+    $('setting-name').required=fields.has('name');window.setFrequentPickerRequired($('setting-category'),key==='rules');
     $('setting-name').value=row?.name||'';$('setting-note').value=row?.note||'';$('setting-order').value=row?.sort_order||0;
     options($('setting-currency'),config.currencies.filter(c=>c.is_active||c.code===row?.currency_code),'首次编制时选择',row?.currency_code);
     $('setting-currency').disabled=key!=='systems'||Boolean(row?.plan_currencies?.length);
@@ -90,5 +90,6 @@
     render();
   }
   $('reload-settings').onclick=()=>act(async()=>{await load();$('setting-editor').hidden=true;status('已重新加载。');});
+  window.createFrequentPicker($('setting-category'),{activityKey:'usage',displayMode:'ranked-scroll',visibleRows:8});
   load().catch(e=>status(e.message,true));
 })();

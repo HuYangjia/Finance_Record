@@ -447,7 +447,11 @@ class FinanceAppSmokeTest(unittest.TestCase):
             }
             self.assertEqual(
                 categories["餐饮"],
-                {"record_count": 3, "last_transaction_date": "2026-09-08"},
+                {
+                    "record_count": 3,
+                    "recent_record_count": 3,
+                    "last_transaction_date": "2026-09-08",
+                },
             )
 
             create_expense(
@@ -476,7 +480,11 @@ class FinanceAppSmokeTest(unittest.TestCase):
             )
             self.assertEqual(
                 frozen_categories["餐饮"],
-                {"record_count": 3, "last_transaction_date": "2026-09-08"},
+                {
+                    "record_count": 3,
+                    "recent_record_count": 3,
+                    "last_transaction_date": "2026-09-08",
+                },
             )
 
         with patch("app.main.today_in_shanghai", return_value=date(2026, 9, 9)):
@@ -498,7 +506,11 @@ class FinanceAppSmokeTest(unittest.TestCase):
         )
         self.assertEqual(
             next_day_categories["餐饮"],
-            {"record_count": 4, "last_transaction_date": "2026-09-08"},
+            {
+                "record_count": 4,
+                "recent_record_count": 4,
+                "last_transaction_date": "2026-09-08",
+            },
         )
         with database.connect() as connection:
             snapshot_count = connection.execute(
@@ -552,6 +564,45 @@ class FinanceAppSmokeTest(unittest.TestCase):
                 "last_transaction_date": "2026-09-18",
             },
         )
+
+    def test_category_activity_uses_account_weighting_windows(self):
+        with database.connect() as connection:
+            account_id = connection.execute(
+                "SELECT id FROM accounts WHERE code='CNY-BANK-01'"
+            ).fetchone()[0]
+            housing_id = connection.execute(
+                "SELECT id FROM categories WHERE kind='expense' AND name='住房'"
+            ).fetchone()[0]
+
+        with patch("app.main.today_in_shanghai", return_value=date(2026, 9, 19)):
+            for amount in ("10", "11", "12"):
+                create_expense(ExpenseCreate(
+                    transaction_date="2026-08-20",
+                    source_account_id=account_id,
+                    amount=amount,
+                    category_id=housing_id,
+                ))
+            create_expense(ExpenseCreate(
+                transaction_date="2026-09-18",
+                source_account_id=account_id,
+                amount="20",
+                category_id=self.food_category_id,
+            ))
+            activity = {
+                row["name"]: row["activity"]
+                for row in list_categories(kind="expense")
+            }
+
+        self.assertEqual(activity["住房"], {
+            "record_count": 3,
+            "recent_record_count": 0,
+            "last_transaction_date": "2026-08-20",
+        })
+        self.assertEqual(activity["餐饮"], {
+            "record_count": 1,
+            "recent_record_count": 1,
+            "last_transaction_date": "2026-09-18",
+        })
 
     def test_payroll_expense_category_creates_expense(self):
         accounts = {account["code"]: account for account in list_accounts()}

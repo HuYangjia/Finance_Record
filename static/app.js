@@ -7,6 +7,7 @@ const state = {
   manualBudget: { expense: false, income: false },
   statuses: {},
   saving: new Set(),
+  entryShortcuts: [],
 };
 
 // Each mode owns its inputs and draft. Keep the original expense selectors.
@@ -102,29 +103,6 @@ const modeLabels = {
   income: "入账",
 };
 
-const quickActions = {
-  "octopus-food": {
-    mode: "expense",
-    sourceAccountCode: "OCTOPUS-STUDENT",
-    categoryName: "餐饮",
-    focus: expenseAmountInput,
-  },
-  "wechat-to-octopus": {
-    mode: "transfer",
-    sourceAccountCode: "WECHAT",
-    destinationAccountCode: "OCTOPUS-STUDENT",
-    focus: transferOutflowInput,
-  },
-  "alipay-daily-investment": {
-    mode: "transfer",
-    sourceAccountCode: "ALIPAY",
-    destinationAccountCode: "ALIPAY-FUND",
-    amount: "35",
-    note: "每日定投",
-    focus: transferOutflowInput,
-  },
-};
-
 function localDate() {
   const now = new Date();
   const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -143,14 +121,6 @@ async function request(path, options) {
 
 function accountById(value) {
   return state.accounts.find((account) => account.id === Number(value));
-}
-
-function accountByCode(code) {
-  return state.accounts.find((account) => account.code === code);
-}
-
-function expenseCategoryByName(name) {
-  return state.expenseCategories.find((category) => category.name === name);
 }
 
 function addOptions(select, records, placeholder) {
@@ -200,9 +170,9 @@ function initializeFrequentPickers() {
   }
   for (const select of [expenseCategorySelect, incomeCategorySelect]) {
     window.createFrequentPicker(select, {
-      commonLabel: "常用分类",
-      otherLabel: "分类",
       activityKey: "usage",
+      displayMode: "ranked-scroll",
+      visibleRows: 8,
     });
   }
 }
@@ -305,75 +275,112 @@ function refreshSubmitState() {
     (state.mode !== "transfer" && categories.length === 0);
 }
 
-function quickActionUnavailableMessage(action) {
-  const missing = [];
-  if (action.sourceAccountCode && !accountByCode(action.sourceAccountCode)) {
-    missing.push(action.sourceAccountCode);
+function hasShortcutDraft(mode) {
+  if (mode === "expense") {
+    return Boolean(expenseAmountInput.value || document.querySelector("#counterparty").value || document.querySelector("#note").value);
   }
-  if (
-    action.destinationAccountCode &&
-    !accountByCode(action.destinationAccountCode)
-  ) {
-    missing.push(action.destinationAccountCode);
+  if (mode === "income") {
+    return Boolean(incomeAmountInput.value || document.querySelector("#income-counterparty").value || document.querySelector("#income-note").value);
   }
-  if (action.categoryName && !expenseCategoryByName(action.categoryName)) {
-    missing.push(`支出分类“${action.categoryName}”`);
-  }
-  return missing.length
-    ? `缺少或已停用：${missing.join("、")}`
-    : "";
+  return Boolean(transferOutflowInput.value || transferInflowInput.value || document.querySelector("#transfer-note").value);
 }
 
-function refreshQuickActionState() {
-  for (const button of document.querySelectorAll("[data-quick-action]")) {
-    const action = quickActions[button.dataset.quickAction];
-    const message = action ? quickActionUnavailableMessage(action) : "快捷操作不存在。";
-    button.disabled = Boolean(message);
-    button.title = message;
+function renderQuickActions() {
+  const target = document.querySelector("#quick-action-list");
+  target.replaceChildren();
+  const rows = state.entryShortcuts.filter((shortcut) => shortcut.is_active);
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "subtle-note";
+    empty.textContent = "暂无便捷操作，可在设置中新增。";
+    target.append(empty);
+    return;
+  }
+  for (const shortcut of rows) {
+    const button = document.createElement("button");
+    button.className = "quick-action";
+    button.type = "button";
+    button.dataset.quickAction = shortcut.id;
+    button.textContent = shortcut.name;
+    button.disabled = !shortcut.valid;
+    button.title = shortcut.invalid_reason || "点击后预填表单，仍需确认保存";
+    button.addEventListener("click", () => {
+      setStatus("");
+      applyQuickAction(shortcut.id);
+    });
+    target.append(button);
+  }
+}
+
+async function loadEntryShortcuts() {
+  try {
+    const data = await request("/api/entry-shortcuts");
+    state.entryShortcuts = data.shortcuts;
+    renderQuickActions();
+  } catch (_) {
+    state.entryShortcuts = [];
+    const target = document.querySelector("#quick-action-list");
+    target.replaceChildren();
+    const message = document.createElement("p");
+    message.className = "subtle-note";
+    message.textContent = "便捷操作加载失败，普通记账仍可使用。";
+    target.append(message);
   }
 }
 
 function applyQuickAction(actionId) {
-  const action = quickActions[actionId];
+  const action = state.entryShortcuts.find((shortcut) => shortcut.id === Number(actionId));
   if(action && state.saving.has(action.mode))return;
   if (!action) {
     setStatus("快捷操作不存在。", "error");
     return;
   }
-
-  const unavailableMessage = quickActionUnavailableMessage(action);
-  if (unavailableMessage) {
-    setStatus(unavailableMessage, "error");
+  if (!action.valid) {
+    setStatus(action.invalid_reason || "便捷操作当前不可用。", "error");
     return;
   }
 
-  const sourceAccount = accountByCode(action.sourceAccountCode);
-  const destinationAccount = action.destinationAccountCode
-    ? accountByCode(action.destinationAccountCode)
-    : null;
-  const category = action.categoryName
-    ? expenseCategoryByName(action.categoryName)
-    : null;
+  if (hasShortcutDraft(action.mode) && !window.confirm("使用便捷操作会替换该模式尚未保存的内容，继续吗？")) return;
 
   setMode(action.mode);
   resetTransactionForm();
 
   if (action.mode === "expense") {
-    expenseAccountSelect.value = String(sourceAccount.id);
-    expenseCategorySelect.value = String(category.id);
-    expenseAmountInput.value = action.amount || "";
+    expenseAccountSelect.value = String(action.source_account_id);
+    expenseCategorySelect.value = String(action.category_id);
+    expenseAmountInput.value = action.outflow_amount || "";
+    counterpartyInput.value = action.counterparty || "";
+  } else if (action.mode === "income") {
+    incomeAccountSelect.value = String(action.destination_account_id);
+    incomeCategorySelect.value = String(action.category_id);
+    incomeAmountInput.value = action.inflow_amount || "";
+    counterpartyInput.value = action.counterparty || "";
   } else if (action.mode === "transfer") {
-    transferSourceSelect.value = String(sourceAccount.id);
-    transferDestinationSelect.value = String(destinationAccount.id);
-    transferOutflowInput.value = action.amount || "";
+    transferSourceSelect.value = String(action.source_account_id);
+    transferDestinationSelect.value = String(action.destination_account_id);
+    transferOutflowInput.value = action.outflow_amount || "";
     noteInput.value = action.note || "";
     updateTransferAmounts();
+    if (!transferInflowInput.disabled) transferInflowInput.value = action.inflow_amount || "";
   }
 
+  if (action.mode !== "transfer") {
+    noteInput.value = action.note || "";
+    document.getElementById(`${action.mode}-preset`).value = "";
+    state.manualBudget[action.mode] = Boolean(action.budget_system_id);
+    if (action.budget_system_id) {
+      document.getElementById(`${action.mode}-budget-system`).value = String(action.budget_system_id);
+    }
+    resolveBudget(action.mode);
+  }
   refreshSubmitState();
   refreshPickers();
-  if(action.mode==='expense')resolveBudget('expense');
-  action.focus.focus();
+  const focusTarget = action.mode === "expense"
+    ? expenseAmountInput
+    : action.mode === "income"
+      ? incomeAmountInput
+      : (!transferOutflowInput.value ? transferOutflowInput : (!transferInflowInput.disabled && !transferInflowInput.value ? transferInflowInput : transferOutflowInput));
+  focusTarget.focus();
 }
 
 function resetTransactionForm({ preserveExpenseAccount = false } = {}) {
@@ -418,7 +425,6 @@ async function loadFormOptions() {
   accountWarning.hidden = accounts.length > 0;
   resetTransactionForm();
   setMode(state.mode);
-  refreshQuickActionState();
 }
 
 function buildPayload() {
@@ -474,13 +480,6 @@ for (const button of document.querySelectorAll(".entry-mode")) {
   });
 }
 
-for (const button of document.querySelectorAll("[data-quick-action]")) {
-  button.addEventListener("click", () => {
-    setStatus("");
-    applyQuickAction(button.dataset.quickAction);
-  });
-}
-
 transferSourceSelect.addEventListener("change", updateTransferAmounts);
 transferDestinationSelect.addEventListener("change", updateTransferAmounts);
 transferOutflowInput.addEventListener("input", updateTransferAmounts);
@@ -527,6 +526,7 @@ async function initialize() {
   try {
     await loadFormOptions();
     await loadBudgetOptions();
+    await loadEntryShortcuts();
   } catch (error) {
     setStatus(error.message, "error");
   }

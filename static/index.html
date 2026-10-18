@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>个人财务账本 - 记账</title>
     <link rel="icon" href="/static/compass-rose.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/styles.css?v=20261007-1">
-    <link rel="stylesheet" href="/static/workspace.css?v=20261001-2">
+    <link rel="stylesheet" href="/static/styles.css?v=20261018-1">
+    <link rel="stylesheet" href="/static/workspace.css?v=20261018-1">
   </head>
   <body>
     <header class="topbar">
@@ -33,11 +33,7 @@
         <div class="section-heading">
           <h2 id="quick-entry-title">常用操作</h2>
         </div>
-        <div class="quick-action-list">
-          <button class="quick-action" type="button" data-quick-action="octopus-food">八达通餐饮</button>
-          <button class="quick-action" type="button" data-quick-action="wechat-to-octopus">微信转八达通</button>
-          <button class="quick-action" type="button" data-quick-action="alipay-daily-investment">支付宝定投 35</button>
-        </div>
+        <div id="quick-action-list" class="quick-action-list" aria-live="polite"><p class="subtle-note">正在加载便捷操作…</p></div>
         <div class="quick-entry-note"><span class="small-badge">日常免标注</span><p>历史与新录入的支出，未单独指定预算时，都自动归入日常。</p><a href="/accounts">查看消费明细 →</a></div>
       </aside>
 
@@ -119,7 +115,7 @@
       </section>
     </main>
 
-    <script src="/static/frequent-picker.js?v=20261007-1"></script>
-    <script src="/static/app.js?v=20261017-1"></script>
+    <script src="/static/frequent-picker.js?v=20261018-1"></script>
+    <script src="/static/app.js?v=20261018-1"></script>
   </body>
 </html>

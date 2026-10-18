@@ -46,6 +46,31 @@ if __name__ == '__main__':
                     (snapshot_date, account_ids['OCTOPUS-STUDENT'], 47, 12, snapshot_date),
                 ],
             )
+            category_ids = {
+                row['name']: row['id']
+                for row in c.execute("SELECT id,name FROM categories WHERE kind='expense'")
+            }
+            c.executemany(
+                """INSERT INTO daily_category_frequent_activity(
+                       snapshot_date,category_id,record_count,
+                       recent_record_count,last_transaction_date
+                   ) VALUES (?,?,?,?,?)""",
+                [
+                    (snapshot_date, category_ids['餐饮'], 3, 0, '2026-09-20'),
+                    (snapshot_date, category_ids['交通'], 1, 1, snapshot_date),
+                ],
+            )
+            c.executemany(
+                """INSERT INTO transaction_entry_shortcuts(
+                       name,mode,source_account_id,destination_account_id,
+                       category_id,outflow_minor,note,sort_order)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                [
+                    ('八达通餐饮','expense',account_ids['OCTOPUS-STUDENT'],None,category_ids['餐饮'],None,'',10),
+                    ('微信转八达通','transfer',account_ids['WECHAT'],account_ids['OCTOPUS-STUDENT'],None,None,'',20),
+                    ('支付宝定投 35','transfer',account_ids['ALIPAY'],account_ids['ALIPAY-FUND'],None,3500,'每日定投',30),
+                ],
+            )
 
         @app.get('/__budget_test_fixture', include_in_schema=False)
         def fixture():

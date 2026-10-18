@@ -212,9 +212,9 @@ function initializeFrequentPickers() {
   }
   for (const select of [detailCategorySelect, editorCategorySelect]) {
     window.createFrequentPicker(select, {
-      commonLabel: "常用分类",
-      otherLabel: "分类",
       activityKey: "usage",
+      displayMode: "ranked-scroll",
+      visibleRows: 8,
     });
   }
 }

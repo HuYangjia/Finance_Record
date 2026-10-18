@@ -56,6 +56,15 @@ def initialize_database() -> None:
     if DATABASE_PATH.exists():
         with sqlite3.connect(DATABASE_PATH) as existing:
             tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if 'daily_category_frequent_activity' in tables and 'recent_record_count' not in {
+                    r[1] for r in existing.execute('PRAGMA table_info(daily_category_frequent_activity)')}:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-category-ranking-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
+            if 'accounts' in tables and 'transaction_entry_shortcuts' not in tables:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-entry-shortcuts-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
             if 'budget_plans' in tables and 'budget_storage_transfers' not in tables:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
                 with sqlite3.connect(BACKUP_DIR / f"finance-pre-storage-balances-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
@@ -112,6 +121,7 @@ def initialize_database() -> None:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.executescript(BUDGET_SCHEMA_PATH.read_text(encoding="utf-8"))
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        migrate_daily_frequent_snapshot_schema(connection)
         from app.budget_migrations import migrate_shared_storage, migrate_unallocated_storage
         migrate_shared_storage(connection)
         migrate_unallocated_storage(connection)
@@ -135,7 +145,6 @@ def initialize_database() -> None:
             connection.execute('ALTER TABLE transactions ADD COLUMN budget_system_id INTEGER REFERENCES budget_systems(id) ON DELETE RESTRICT')
         connection.execute('CREATE INDEX IF NOT EXISTS transactions_budget_index ON transactions(budget_system_id,transaction_date)')
         migrate_change_audit_logs(connection)
-        migrate_daily_frequent_snapshot_schema(connection)
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         connection.executemany(
             """
@@ -180,6 +189,7 @@ def initialize_database() -> None:
                 daily_id = daily['id']
             connection.execute("INSERT INTO app_settings(key,value) VALUES ('daily_expense_budget_system_id',?)", (str(daily_id),))
             connection.execute("UPDATE app_settings SET value=CAST(value AS INTEGER)+1 WHERE key='budget_config_version'")
+        initialize_entry_shortcuts(connection)
 
 
 def migrate_change_audit_logs(connection: sqlite3.Connection) -> None:
@@ -198,6 +208,7 @@ def migrate_change_audit_logs(connection: sqlite3.Connection) -> None:
             and "exchange_rate" in current_sql
             and "offset_group" in current_sql
             and "'budget'" in current_sql
+            and "entry_shortcut" in current_sql
         )
     ):
         return
@@ -217,7 +228,8 @@ def migrate_change_audit_logs(connection: sqlite3.Connection) -> None:
                     'investment_valuation',
                     'exchange_rate',
                     'offset_group',
-                    'budget'
+                    'budget',
+                    'entry_shortcut'
                 )
             ),
             entity_id INTEGER,
@@ -275,6 +287,80 @@ def migrate_daily_frequent_snapshot_schema(connection: sqlite3.Connection) -> No
             ADD COLUMN recent_record_count INTEGER NOT NULL DEFAULT 0
             """
         )
+
+    category_activity_columns = {
+        row["name"]
+        for row in connection.execute(
+            "PRAGMA table_info(daily_category_frequent_activity)"
+        ).fetchall()
+    }
+    if "recent_record_count" not in category_activity_columns:
+        connection.execute(
+            """
+            ALTER TABLE daily_category_frequent_activity
+            ADD COLUMN recent_record_count INTEGER NOT NULL DEFAULT 0
+            """
+        )
+
+
+def initialize_entry_shortcuts(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO app_settings(key, value)
+        VALUES ('entry_shortcut_version', '1')
+        """
+    )
+    if connection.execute(
+        "SELECT 1 FROM app_settings WHERE key='entry_shortcuts_initialized'"
+    ).fetchone():
+        return
+
+    accounts = {
+        row["code"]: row["id"]
+        for row in connection.execute(
+            "SELECT id, code FROM accounts WHERE is_active=1"
+        )
+    }
+    food = connection.execute(
+        """
+        SELECT id FROM categories
+        WHERE kind='expense' AND name='餐饮' AND is_active=1
+        """
+    ).fetchone()
+    rows = []
+    if accounts.get("OCTOPUS-STUDENT") and food:
+        rows.append((
+            "八达通餐饮", "expense", accounts["OCTOPUS-STUDENT"], None,
+            food["id"], None, None, None, None, "", 10,
+        ))
+    if accounts.get("WECHAT") and accounts.get("OCTOPUS-STUDENT"):
+        rows.append((
+            "微信转八达通", "transfer", accounts["WECHAT"],
+            accounts["OCTOPUS-STUDENT"], None, None, None, None, None, "", 20,
+        ))
+    if accounts.get("ALIPAY") and accounts.get("ALIPAY-FUND"):
+        rows.append((
+            "支付宝定投 35", "transfer", accounts["ALIPAY"],
+            accounts["ALIPAY-FUND"], None, None, 3500, None, None,
+            "每日定投", 30,
+        ))
+    if rows:
+        connection.executemany(
+            """
+            INSERT INTO transaction_entry_shortcuts(
+                name, mode, source_account_id, destination_account_id,
+                category_id, budget_system_id, outflow_minor, inflow_minor,
+                counterparty, note, sort_order
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            rows,
+        )
+    connection.execute(
+        """
+        INSERT INTO app_settings(key, value)
+        VALUES ('entry_shortcuts_initialized', '1')
+        """
+    )
 
 
 def create_backup() -> Path:

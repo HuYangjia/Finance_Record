@@ -9,7 +9,7 @@ window.BudgetUI = (() => {
   }
   function options(select, rows, empty='请选择', selected=select.value) {
     select.replaceChildren();if(empty!==null){const o=node('option',empty);o.value='';select.append(o);}
-    for(const r of rows){const o=node('option',r.path||r.name||r.code);o.value=r.id??r.code;if(r.is_active===0)o.textContent+='（停用）';select.append(o);}
+    for(const r of rows){const o=node('option',r.path||r.display_name||r.name||r.code);o.value=r.id??r.code;if(r.is_active===0)o.textContent+='（停用）';if(r.activity)o.dataset.activity=JSON.stringify(r.activity);select.append(o);}
     select.value=selected==null?'':String(selected);
   }
   function status(message,error=false){$('budget-status').textContent=message;$('budget-status').className=error?'dialog-status error':'dialog-status';}

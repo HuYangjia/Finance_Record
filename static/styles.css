@@ -486,6 +486,10 @@ textarea {
   display: none;
 }
 
+.frequent-picker.is-ranked-scroll .frequent-picker-menu {
+  max-height: calc(var(--picker-visible-rows, 8) * 34px + 12px);
+}
+
 .frequent-picker-option,
 .frequent-picker-other-toggle {
   background: #fff;

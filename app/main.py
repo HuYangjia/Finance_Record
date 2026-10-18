@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from app.database import ROOT_DIR, connect, create_backup, initialize_database
 from app.budgets import router as budgets_router, require_system, budget_filter_sql
 from app.budget_storage import router as budget_storage_router
+from app.entry_shortcuts import router as entry_shortcuts_router
 from app.offsets import (
     router as offsets_router,
     annotate_transactions,
@@ -79,10 +80,11 @@ FLAG_TYPE_LABELS = {
 INVESTMENT_ACCOUNT_TYPES = {"investment_asset", "broker_cash"}
 SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
 FX_RATE_SOURCE = "Frankfurter"
-FREQUENT_SNAPSHOT_RULE_VERSION = 2
+FREQUENT_SNAPSHOT_RULE_VERSION = 3
 ACCOUNT_ACTIVITY_WINDOW_DAYS = 45
 ACCOUNT_RECENT_WINDOW_DAYS = 14
-CATEGORY_ACTIVITY_WINDOW_DAYS = 90
+CATEGORY_ACTIVITY_WINDOW_DAYS = 45
+CATEGORY_RECENT_WINDOW_DAYS = 14
 FREQUENT_ACCOUNT_ACTIVITY_KEYS = (
     "overall",
     "expense_source",
@@ -121,6 +123,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(offsets_router)
 app.include_router(budgets_router)
 app.include_router(budget_storage_router)
+app.include_router(entry_shortcuts_router)
 
 
 @app.get("/offsets", include_in_schema=False)
@@ -1495,24 +1498,31 @@ def list_account_recent_activity(
     }
 
 
-def list_category_recent_activity(connection, start_date: str) -> dict[int, dict[str, Any]]:
+def list_category_recent_activity(
+    connection,
+    start_date: str,
+    recent_start_date: str,
+) -> dict[int, dict[str, Any]]:
     rows = connection.execute(
         """
         SELECT
             category_id,
             COUNT(*) AS record_count,
+            SUM(CASE WHEN transaction_date >= ? THEN 1 ELSE 0 END)
+                AS recent_record_count,
             MAX(transaction_date) AS last_transaction_date
         FROM transactions
         WHERE category_id IS NOT NULL
           AND transaction_date >= ?
         GROUP BY category_id
         """,
-        (start_date,),
+        (recent_start_date, start_date),
     ).fetchall()
     return {
-        row["category_id"]: serialize_recent_activity(
+        row["category_id"]: serialize_account_recent_activity(
             row["record_count"],
             row["last_transaction_date"],
+            row["recent_record_count"],
         )
         for row in rows
     }
@@ -1548,6 +1558,7 @@ def ensure_daily_frequent_snapshot(connection, snapshot_date: date) -> None:
     category_activity = list_category_recent_activity(
         connection,
         activity_start_date(snapshot_date, CATEGORY_ACTIVITY_WINDOW_DAYS),
+        activity_start_date(snapshot_date, CATEGORY_RECENT_WINDOW_DAYS),
     )
 
     connection.execute(
@@ -1586,6 +1597,7 @@ def ensure_daily_frequent_snapshot(connection, snapshot_date: date) -> None:
             snapshot_date_text,
             category_id,
             activity["record_count"],
+            activity["recent_record_count"],
             activity["last_transaction_date"],
         )
         for category_id, activity in category_activity.items()
@@ -1595,8 +1607,9 @@ def ensure_daily_frequent_snapshot(connection, snapshot_date: date) -> None:
         connection.executemany(
             """
             INSERT INTO daily_category_frequent_activity (
-                snapshot_date, category_id, record_count, last_transaction_date
-            ) VALUES (?, ?, ?, ?)
+                snapshot_date, category_id, record_count,
+                recent_record_count, last_transaction_date
+            ) VALUES (?, ?, ?, ?, ?)
             """,
             category_rows,
         )
@@ -1636,16 +1649,18 @@ def list_daily_category_frequent_activity(
 ) -> dict[int, dict[str, Any]]:
     rows = connection.execute(
         """
-        SELECT category_id, record_count, last_transaction_date
+        SELECT category_id, record_count, recent_record_count,
+               last_transaction_date
         FROM daily_category_frequent_activity
         WHERE snapshot_date = ?
         """,
         (snapshot_date,),
     ).fetchall()
     return {
-        row["category_id"]: serialize_recent_activity(
+        row["category_id"]: serialize_account_recent_activity(
             row["record_count"],
             row["last_transaction_date"],
+            row["recent_record_count"],
         )
         for row in rows
     }
@@ -2781,7 +2796,7 @@ def list_categories(
             "is_active": bool(row["is_active"]),
             "activity": recent_activity.get(
                 row["id"],
-                serialize_recent_activity(0, None),
+                serialize_account_recent_activity(0, None, 0),
             ),
             "display_name": f"{row['parent_name']} / {row['name']}"
             if row["parent_name"]
