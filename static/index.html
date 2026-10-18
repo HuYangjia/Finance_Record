@@ -6,7 +6,7 @@
     <title>个人财务账本 - 记账</title>
     <link rel="icon" href="/static/compass-rose.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/static/styles.css?v=20261018-3">
-    <link rel="stylesheet" href="/static/workspace.css?v=20261018-1">
+    <link rel="stylesheet" href="/static/workspace.css?v=20261018-2">
   </head>
   <body>
     <header class="topbar">
@@ -52,6 +52,9 @@
           尚未创建账户。请先直接在 SQLite 数据库的 <code>accounts</code> 表新增账户。
         </div>
         <form id="transaction-form">
+          <div class="form-actions entry-save-bar">
+            <button id="submit-transaction" type="submit">保存支出</button>
+          </div>
           <div class="form-grid">
             <label>
               <span>日期</span>
@@ -108,14 +111,12 @@
               <textarea id="note" rows="3" maxlength="500"></textarea>
             </label>
           </div>
-          <div class="form-actions">
-            <button id="submit-transaction" type="submit">保存支出</button>
-          </div>
         </form>
       </section>
     </main>
 
+    <script src="/static/number-input.js?v=20261018-1"></script>
     <script src="/static/frequent-picker.js?v=20261018-3"></script>
-    <script src="/static/app.js?v=20261018-3"></script>
+    <script src="/static/app.js?v=20261018-4"></script>
   </body>
 </html>

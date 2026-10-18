@@ -19,6 +19,9 @@ input:not([type=checkbox]), select, textarea { border-color: #cddbd6; background
 input:focus, select:focus, textarea:focus { border-color: #458f78; outline: none; box-shadow: 0 0 0 3px #e0eee6; }
 input:disabled, select:disabled, textarea:disabled { background: #f3f6f4; }
 input[type=checkbox] { accent-color: var(--accent); }
+input[type=number] { appearance: textfield; -moz-appearance: textfield; }
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 input::placeholder, textarea::placeholder { color: #8b9a98; font-size: 12px; }
 label { color: #48615e; font-size: 13px; line-height: 1.5; gap: 7px; }
 label small, .subtle-note, .analysis-summary { color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.7; }
@@ -106,12 +109,23 @@ tbody tr:hover td { background: #fafcf9; }
 .entry-description { font-size: 12px; color: var(--muted); margin: 0 0 20px; }
 .entry-modes { margin-bottom: 25px; }
 .entry-panel .form-grid { gap: 20px; align-items: start; }
-.entry-panel .form-actions { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 22px; }
+.entry-panel .entry-save-bar { border-bottom: 1px solid var(--line); margin: 0 0 22px; padding: 0 0 18px; }
 .entry-panel button[type=submit] { min-width: 138px; }
 .entry-budget-field { padding: 14px; background: #f2f7f0; border: 1px solid #e3eade; border-radius: 10px; }
 .budget-auto-button { justify-self: start; border: 0; background: transparent; padding: 0; min-height: 24px; font-size: 11px; }
 .budget-auto-button:hover:not(:disabled) { background: transparent; text-decoration: underline; }
 .entry-main label small { font-size: 11px; }
+
+@media (min-width: 701px) {
+  .entry-panel .entry-save-bar {
+    background: rgba(255, 255, 255, .96);
+    box-shadow: 0 9px 14px -14px #213b3b80;
+    padding-top: 10px;
+    position: sticky;
+    top: 0;
+    z-index: 8;
+  }
+}
 .frequent-picker-trigger { min-height: 42px; border-color: #cddbd6; border-radius: 8px; }
 .frequent-picker-menu { border-radius: 10px; border-color: #d2dfd6; box-shadow: 0 8px 24px #25463318; }
 .budget-main { max-width: 1380px; }

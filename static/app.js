@@ -24,9 +24,9 @@ for (const mode of ['income', 'transfer']) {
     counterparty.querySelector('span').removeAttribute('id');counterparty.querySelector('span').textContent='来源或对象';grid.append(counterparty);
   }
   const note = document.querySelector('#note').closest('label').cloneNode(true);note.querySelector('textarea').id=`${mode}-note`;grid.append(note);
-  const actions=document.createElement('div');actions.className='form-actions';
+  const actions=document.createElement('div');actions.className='form-actions entry-save-bar';
   const submit=document.createElement('button');submit.type='submit';submit.id=`submit-${mode}`;submit.textContent=mode==='income'?'保存入账':'保存转账 / 换汇';actions.append(submit);
-  next.append(grid,actions);forms.expense.after(next);forms[mode]=next;
+  next.append(actions,grid);forms.expense.after(next);forms[mode]=next;
 }
 let form = forms.expense;
 const statusElement = document.querySelector("#form-status");
