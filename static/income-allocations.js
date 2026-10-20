@@ -13,9 +13,24 @@ window.IncomeAllocations = (() => {
     const row=node('div','','income-allocation-row'),select=node('select'),amount=input('number',initial.amount??'');
     select.required=true;select.className='allocation-budget';amount.className='allocation-amount';amount.required=true;amount.min='0.00000001';
     options(select,config.systems.filter(s=>s.is_active||s.id===initial.budget_system_id),'选择预算',initial.budget_system_id);
-    const code=node('small'),amountLabel=field('分配金额',amount);amountLabel.append(code);
+    const code=node('small'),amountLabel=field('分配金额',amount),amountCell=node('div');
+    const remainder=input('checkbox'),remainderLabel=field('全部剩余',remainder);
+    remainder.className='allocation-remainder';remainderLabel.className='allocation-remainder-option';
+    amountLabel.append(code);amountCell.append(amountLabel,remainderLabel);
+    let manualAmount=amount.value;
+    remainder.addEventListener('change',()=>{
+      if(remainder.checked){
+        for(const other of row.parentElement.querySelectorAll('.allocation-remainder:checked')){
+          if(other===remainder)continue;
+          other.checked=false;other.dispatchEvent(new Event('change'));
+        }
+        manualAmount=amount.value;amount.value='';
+      }else amount.value=manualAmount;
+      amount.readOnly=remainder.checked;amount.required=!remainder.checked;
+      amount.placeholder=remainder.checked?'自动换算剩余':'';
+    });
     const month=input('month',initial.month||'');month.required=withMonth;month.className='allocation-month';
-    row.append(field('预算用途',select),amountLabel);if(withMonth)row.append(field('生效月份',month));
+    row.append(field('预算用途',select),amountCell);if(withMonth)row.append(field('生效月份',month));
     const remove=button('移除',()=>{row.remove();row.dispatchEvent(new Event('allocation-change'));});row.append(remove);
     function update() {
       const system=config.systems.find(s=>s.id===Number(select.value));
@@ -26,6 +41,7 @@ window.IncomeAllocations = (() => {
     select.addEventListener('change',update);update();
     return {row,select,amount,month,update};
   }
+  const rowAmount=row=>row.querySelector('.allocation-remainder').checked?null:row.querySelector('.allocation-amount').value;
 
   const chooser=dialog('分配收入'),searchForm=node('form','','funding-search'),search=input('search');
   search.placeholder='搜索收入或冲销事项';search.maxLength=120;
@@ -64,24 +80,32 @@ window.IncomeAllocations = (() => {
   const preview=node('p','','funding-preview');preview.setAttribute('role','status');
   save.type='submit';error.setAttribute('role','alert');
   let current=null,currentKey=null,done=null,dirty=false,busy=false,editorSerial=0,previewSerial=0,previewTimer;
-  const add=button('＋添加预算',()=>{addRow();dirty=true;});
+  const add=button('＋添加预算',()=>{addRow();dirty=true;schedulePreview();});
   scroll.append(summary,rows,add,preview,legacy,error);
   footer.append(button('取消',dismiss),save);form.append(scroll,footer);editor.append(form);editor.id='income-allocation-editor';
   function dismiss(){if(!busy&&(!dirty||confirm('分配尚未保存，确定放弃修改？')))editor.close();}
   editor.addEventListener('request-close',dismiss);editor.addEventListener('cancel',e=>{e.preventDefault();dismiss();});
-  form.addEventListener('input',()=>{dirty=true;error.textContent='';schedulePreview();});
+  form.addEventListener('input',e=>{
+    // Checkboxes emit input before change; let the row preserve its manual value first.
+    if(e.target.matches('.allocation-remainder'))return;
+    dirty=true;error.textContent='';schedulePreview();
+  });
   window.addEventListener('beforeunload',e=>{if(editor.open&&dirty){e.preventDefault();e.returnValue='';}});
   const draftItems=()=>[...rows.children].map(row=>({budget_system_id:Number(row.querySelector('select').value),
-    month:row.querySelector('[type=month]').value,amount:row.querySelector('[type=number]').value}));
+    month:row.querySelector('[type=month]').value,amount:rowAmount(row)}));
   function schedulePreview(){
     clearTimeout(previewTimer);const ticket=++previewSerial;preview.textContent='';
+    for(const row of rows.children)if(rowAmount(row)===null)row.querySelector('.allocation-amount').value='';
     previewTimer=setTimeout(async()=>{
       const items=draftItems();
-      if(items.some(i=>!i.budget_system_id||!i.amount||!i.month))return;
+      if(items.some(i=>!i.budget_system_id||i.amount===''||!i.month))return;
       try{
         const data=await request(`/api/budget/income-allocations/${currentKey.kind}/${currentKey.id}/preview`,
           {expected_token:current.token,items},'POST');
         if(ticket!==previewSerial)return;
+        [...rows.children].forEach((row,index)=>{
+          if(rowAmount(row)===null)row.querySelector('.allocation-amount').value=data.items[index].amount;
+        });
         preview.textContent=`本次合计占用 ${data.occupied} ${data.currency_code} · 保存后尚可分配 ${data.remaining??'未完整'} ${data.currency_code}${data.overallocated?' · 已超额，请减少金额':''}`;
         preview.classList.toggle('error',data.overallocated||!data.complete);
       }catch(e){if(ticket===previewSerial)preview.textContent=e.message;}
@@ -102,7 +126,7 @@ window.IncomeAllocations = (() => {
   }
   function addRow(initial={}) {
     const r=amountRow(current.config,current.source.currency_code,{month:current.source.date?.slice(0,7)||'',...initial},true);
-    r.row.addEventListener('change',()=>{dirty=true;refreshLegacy();schedulePreview();});
+    r.row.addEventListener('change',()=>{dirty=true;error.textContent='';refreshLegacy();schedulePreview();});
     r.row.addEventListener('allocation-change',()=>{dirty=true;refreshLegacy();schedulePreview();});
     rows.append(r.row);refreshLegacy();return r;
   }
@@ -115,7 +139,7 @@ window.IncomeAllocations = (() => {
       current=data;currentKey={kind,id};done=callback;dirty=false;rows.replaceChildren();legacy.replaceChildren();summary.replaceChildren();error.textContent='';
       const s=data.source;
       summary.append(node('strong',s.title),node('p',`${s.date||'来源日期待整理'} · 净收入 ${s.net??'未完整'} ${s.currency_code} · 已分配 ${s.occupied??'未完整'} ${s.currency_code}`),
-        node('p','填写各预算币种的金额；留空分配列表表示暂不分配。保存后自动汇总到预算，正负余额连续结转。','subtle-note'));
+        node('p','填写各预算币种的金额，或选一行“全部剩余”自动换算其他行之后的余款。精度尾差保留在来源；移除全部行表示暂不分配。保存后金额固定，正负余额连续结转。','subtle-note'));
       if(s.reason||s.overallocated)summary.append(node('p',s.reason||'来源已超额，减少分配后保存。','dialog-status error'));
       for(const item of data.items)addRow(item);
       if(!data.items.length)addRow({budget_system_id:target?.system?Number(target.system):undefined,
@@ -140,7 +164,7 @@ window.IncomeAllocations = (() => {
     const section=node('section','','full-width income-entry-allocation');
     const toggle=input('checkbox'),label=field('按金额拆分到多个预算',toggle),body=node('fieldset');
     body.hidden=true;body.disabled=true;const parts=node('div','','income-allocation-rows');
-    const hint=node('p','按各预算币种填写金额，余款可以以后再分配；合计不能超过本笔收入。','subtle-note');
+    const hint=node('p','按各预算币种填写金额，可选一行“全部剩余”，保存时自动换算其余金额；余款也可以后分配，合计不能超过本笔收入。','subtle-note');
     const addPart=()=>{const cfg=getConfig();if(!cfg)return;const r=amountRow(cfg,getSourceCode());parts.append(r.row);};
     body.append(hint,parts,button('＋添加预算',addPart));section.append(label,body);
     host.insertBefore(section,host.querySelector('input[id$="-counterparty"]')?.closest('label')||host.querySelector('textarea')?.closest('label')||null);
@@ -148,7 +172,7 @@ window.IncomeAllocations = (() => {
     function reset(){toggle.checked=false;body.hidden=true;body.disabled=true;parts.replaceChildren();budgetSelect.disabled=!getConfig();}
     return {reset,payload(){
       if(!toggle.checked)return budgetSelect.value?[{budget_system_id:Number(budgetSelect.value),amount:null}]:[];
-      return [...parts.children].map(row=>({budget_system_id:Number(row.querySelector('select').value),amount:row.querySelector('[type=number]').value}));
+      return [...parts.children].map(row=>({budget_system_id:Number(row.querySelector('select').value),amount:rowAmount(row)}));
     }};
   }
   return {browse,open,entry};

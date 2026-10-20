@@ -114,6 +114,67 @@ class IncomeAllocationTest(unittest.TestCase):
         usd=self.config['systems'][-1]['id']
         self.allocate(source,[self.item_for('1',usd)],code=422)
 
+    def test_remainder_cross_currency_preview_matches_save_and_replaces_old_amount(self):
+        cny=self.setting('systems',name='人民币留存',currency_code='CNY')['id']
+        with database.connect() as c:c.execute("UPDATE daily_cny_exchange_rates SET hkd_cny_rate='0.9'")
+        source=self.income('1000.01',[self.item_for('400')])['id']
+        before_accounts=self.call('GET','/api/accounts')
+        detail=self.details(source)
+        # Automatic first, explicit last: order must not affect the remainder.
+        items=[self.item_for(None,cny),self.item_for('400')]
+        preview=self.call('POST',f'/api/budget/income-allocations/transaction/{source}/preview',
+                          dict(expected_token=detail['token'],items=items))
+        self.assertEqual(preview['items'][0]['amount'],'540.00')
+        self.assertEqual((preview['occupied'],preview['remaining']),('1000.00','0.01'))
+        self.assertEqual(self.details(source)['token'],detail['token'])
+        self.allocate(source,items)
+        saved=self.details(source)
+        self.assertEqual(saved['source']['remaining'],preview['remaining'])
+        self.assertEqual(next(i for i in saved['items'] if i['budget_system_id']==cny)['amount'],'540.00')
+        self.assertEqual(self.call('GET','/api/accounts'),before_accounts)
+        # One more target cent would overdraw the source; a second save is stable.
+        self.allocate(source,[self.item_for('540.01',cny),self.item_for('400')],code=422)
+        self.allocate(source,list(reversed(items)))
+        self.assertEqual(self.details(source)['source']['remaining'],'0.01')
+        self.allocate(source,[self.item_for(None,cny),self.item_for('100')])
+        self.assertEqual(next(i for i in self.details(source)['items'] if i['budget_system_id']==cny)['amount'],'810.00')
+
+    def test_remainder_income_atomic_save_and_invalid_remainders(self):
+        other=self.setting('systems',name='留存',currency_code='HKD')['id']
+        source=self.income('1000',[self.item_for('300'),self.item_for(None,other)])['id']
+        self.assertEqual(self.details(source)['source']['remaining'],'0.00')
+        self.assertEqual(next(i for i in self.details(source)['items'] if i['budget_system_id']==other)['amount'],'700.00')
+        original=self.details(source)['token']
+        for items in ([self.item_for(None),self.item_for(None,other)],
+                      [self.item_for('1000'),self.item_for(None,other)],
+                      [self.item_for('1001'),self.item_for(None,other)]):
+            self.allocate(source,items,code=422)
+            self.call('POST',f'/api/budget/income-allocations/transaction/{source}/preview',
+                      dict(expected_token=original,items=items),422)
+            self.assertEqual(self.details(source)['token'],original)
+        accounts=self.call('GET','/api/accounts')
+        self.call('POST','/api/incomes',dict(transaction_date='2026-10-05',
+            destination_account_id=self.account,category_id=self.categories['income'],amount='100',
+            budget_allocations=[self.item_for('100'),self.item_for(None,other)]),422)
+        self.assertEqual(self.call('GET','/api/accounts'),accounts)
+
+    def test_remainder_missing_fx_tiny_balance_and_zero_decimal_currency(self):
+        usd=self.setting('systems',name='美元',currency_code='USD')['id']
+        source=self.income('1')['id']
+        # Source remainder 0.01 HKD cannot buy the minimum 0.01 USD at USD/HKD=7.
+        self.allocate(source,[self.item_for('0.99'),self.item_for(None,usd)],code=422)
+        with database.connect() as c:c.execute('DELETE FROM daily_cny_exchange_rates')
+        self.allocate(source,[self.item_for(None,usd)],code=422)
+        self.assertEqual(self.details(source)['items'],[])
+        yen=self.setting('systems',name='日元',currency_code='JPY')['id']
+        with database.connect() as c:
+            account=c.execute("""INSERT INTO accounts(code,name,account_class,account_type,currency_code,opening_balance_date)
+                VALUES ('YEN','日元','asset','cash','JPY','2026-01-01')""").lastrowid
+        self.account=account
+        jpy=self.income('101',[self.item_for('40',yen),self.item_for(None,yen,'2026-11')])['id']
+        self.assertEqual([i['amount'] for i in self.details(jpy)['items']],['40','61'])
+        self.assertEqual(self.details(jpy)['source']['remaining'],'0')
+
     def test_historical_plan_replacement_preserves_storage_and_no_double_count(self):
         p=self.plan(currency='HKD',total='600',items=[self.item('400')])
         source=self.income()['id']

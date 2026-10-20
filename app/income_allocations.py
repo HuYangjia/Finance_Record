@@ -65,14 +65,60 @@ def record_plan_revision(c, plan_id):
               (plan_id,p['version'],json.dumps(snapshot,ensure_ascii=False)))
 
 
+def resolve_remainder(c, catalog, source, items):
+    """Resolve the one automatic row against the entire replacement draft."""
+    automatic = [i for i,item in enumerate(items) if item.amount is None]
+    if not automatic:
+        return items
+    if len(automatic) > 1:
+        raise HTTPException(422,'只能选择一行“全部剩余”。')
+    if not source['complete'] or source['net'] is None:
+        raise HTTPException(422,source['reason'] or '来源净收入无法计算。')
+    remaining = minor(Decimal(source['net']),source['decimal_places'])
+    codes = []
+    for item in items:
+        system = require_system(c,item.budget_system_id,True)
+        code = system['currency_code'] or source['currency_code']
+        codes.append(code)
+        if item.amount is not None:
+            minor(item.amount,currency(c,code))
+            cost,_ = catalog.charge(item.amount,code,source)
+            if cost is None:
+                raise HTTPException(422,'缺少汇率，无法计算全部剩余。')
+            remaining -= cost
+    if remaining <= 0:
+        raise HTTPException(422,'其他分配已用完或超出收入，没有可分配的剩余；请减少金额或移除“全部剩余”行。')
+    index = automatic[0]
+    code = codes[index]
+    places = currency(c,code)
+    # Invert the same conversion used for charging to avoid mismatched rounding.
+    rate,_ = catalog.amount(Decimal(1),code,source['date'],source['currency_code'])
+    if rate is None or rate <= 0:
+        raise HTTPException(422,'缺少汇率，无法计算全部剩余。')
+    value = Decimal(remaining) / 10**source['decimal_places'] / rate
+    amount = minor(value.quantize(Decimal(1).scaleb(-places),rounding=ROUND_FLOOR),places)
+    def cost(units):
+        return catalog.charge(Decimal(units) / 10**places,code,source)[0]
+    # Decimal division at a currency boundary can differ by one unit. Verify
+    # against the authoritative source charge and use the largest safe amount.
+    while amount > 0 and cost(amount) > remaining:
+        amount -= 1
+    while amount < 10**15 and cost(amount+1) <= remaining:
+        amount += 1
+    if amount <= 0:
+        raise HTTPException(422,'剩余不足此预算币种的最小金额，请换一个预算或保留余款。')
+    resolved = list(items)
+    resolved[index] = items[index].model_copy(update={'amount':Decimal(money(amount,places))})
+    return resolved
+
+
 def save_allocations(c, kind, entry_id, items, replace_legacy=(), expected_token=None):
     """Caller owns the write transaction, including a new income when supplied."""
     catalog = FundingCatalog(c)
     before = catalog.describe(kind, entry_id)
     if expected_token is not None and expected_token != allocation_token(c,catalog,before):
         raise HTTPException(409,'收入、分配或预算已更新，请重新打开分配窗口核对；当前草稿未保存。')
-    if any(item.amount is None for item in items) and len(items)!=1:
-        raise HTTPException(422,'全额分配只支持一个预算；拆分时请逐项填写金额。')
+    items = resolve_remainder(c,catalog,before,items)
     previous = [r for r in catalog.bindings if reference(r)==(kind,entry_id)]
     affected = {r['plan_id'] for r in previous}
     for pid in affected:
@@ -97,15 +143,7 @@ def save_allocations(c, kind, entry_id, items, replace_legacy=(), expected_token
         if existing_codes and existing_codes != {code}:
             raise HTTPException(409,'此预算存在旧多币种计划，请先整理。')
         places = currency(c,code)
-        if item.amount is None:
-            if not before['complete'] or before['net'] is None:
-                raise HTTPException(422,before['reason'] or '来源净收入无法计算。')
-            value, _ = catalog.amount(Decimal(before['net']),before['currency_code'],before['date'],code)
-            if value is None:
-                raise HTTPException(422,'缺少汇率，无法全额分配到此预算。')
-            amount = int((value*10**places).to_integral_value(rounding=ROUND_FLOOR))
-        else:
-            amount = minor(item.amount,places)
+        amount = minor(item.amount,places)
         if amount <= 0:
             raise HTTPException(422,'分配金额须大于零。')
         plan = c.execute('SELECT * FROM budget_plans WHERE budget_system_id=? AND month=? AND currency_code=?',
@@ -184,21 +222,23 @@ def preview_allocations(kind: Literal['transaction','offset_group'], entry_id: i
         if body.expected_token != allocation_token(c,catalog,source):
             raise HTTPException(409,'来源或预算已变化，请重新打开分配窗口核对。')
         used = 0
-        for item in body.items:
+        items = resolve_remainder(c,catalog,source,body.items)
+        resolved = []
+        for item in items:
             system = require_system(c,item.budget_system_id,True)
             code = system['currency_code'] or source['currency_code']
-            if item.amount is None:
-                raise HTTPException(422,'预览拆分时请填写金额。')
-            minor(item.amount,currency(c,code))
+            places = currency(c,code)
+            units = minor(item.amount,places)
             cost,_ = catalog.charge(item.amount,code,source)
             if cost is None:
                 raise HTTPException(422,'缺少汇率，无法核验分配。')
             used += cost
+            resolved.append(dict(amount=money(units,places),currency_code=code))
         remaining = Decimal(source['net']) - Decimal(money(used,source['decimal_places'])) if source['net'] is not None else None
         return dict(occupied=money(used,source['decimal_places']),
                     remaining=str(remaining) if remaining is not None else None,
                     currency_code=source['currency_code'],complete=source['complete'],
-                    overallocated=remaining is not None and remaining<0)
+                    overallocated=remaining is not None and remaining<0,items=resolved)
 
 
 def allocations_for_transactions(c, transaction_ids, budget_system_id=None):

@@ -34,6 +34,9 @@
 }
 .income-allocation-row label { display: grid; gap: 6px; }
 .income-allocation-row input, .income-allocation-row select { width: 100%; min-width: 0; }
+.income-allocation-row .allocation-remainder-option { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; }
+.income-allocation-row .allocation-remainder { width: 18px; height: 18px; margin: 0; flex: 0 0 auto; order: -1; }
+.income-allocation-row .allocation-amount[readonly] { background: #edf5ef; }
 .income-allocation-row small { color: #607269; }
 .income-allocation-row > button { margin-top: 24px; }
 .income-allocation-dialog { width: min(950px, 92vw); max-height: 88vh; }
