@@ -249,6 +249,132 @@ class IncomeAllocationTest(unittest.TestCase):
         self.assertEqual(data['pagination']['total'],1)
         self.assertEqual(next(r for r in data['summary']['valuations'] if r['currency_code']=='HKD')['income'],'300.00')
 
+    def personal_income(self, month='2026-10'):
+        end='30' if month.endswith('11') else '31'
+        return self.call('GET',f'/api/personal-cashflow/search?budget_system_id={self.daily}&transaction_types=income&start_date={month}-01&end_date={month}-{end}')
+
+    def test_legacy_tags_do_not_create_funding_after_cancellation(self):
+        source=self.transaction(kind='income',amount='1000',budget=self.daily)['id']
+        original=self.call('GET',f'/api/transactions/{source}')
+        self.assertEqual(self.personal_income()['pagination']['total'],0)
+        self.allocate(source,[self.item_for('300')])
+        self.assertEqual(self.personal_income()['summary']['valuations'][1]['income'],'300.00')
+        self.allocate(source,[])
+        self.assertEqual(self.personal_income()['pagination']['total'],0)
+        raw=self.call('GET',f'/api/transactions/search?budget_system_id={self.daily}&transaction_types=income')
+        self.assertEqual(raw['pagination']['total'],1)
+        self.assertEqual(raw['summary']['budget_income_allocations'],[])
+        self.assertEqual(self.call('GET',f'/api/transactions/{source}')['inflow_amount'],original['inflow_amount'])
+        group=self.call('POST','/api/offset-groups',dict(title='旧工资归组',kind='income',transaction_ids=[source]),201)['id']
+        self.allocate(group,[self.item_for('200')],kind='offset_group')
+        self.allocate(group,[],kind='offset_group')
+        self.assertEqual(self.personal_income()['pagination']['total'],0)
+
+    def test_invalid_source_is_consistent_in_query_analysis_execution_and_export(self):
+        source=self.income('1000',[self.item_for('800')])['id']
+        self.call('PUT',f'/api/transactions/{source}',dict(transaction_date='2026-10-05',transaction_type='income',
+            destination_account_id=self.account,inflow_amount='500',category_id=self.categories['income']))
+        data=self.personal_income()
+        self.assertFalse(data['summary']['budget_complete'])
+        self.assertFalse(data['summary']['valuations'][1]['complete'])
+        self.assertEqual(data['summary']['valuations'][1]['income'],'0.00')
+        self.assertIn('超额',data['summary']['allocation_warnings'][0]['reason'])
+        self.assertEqual(data['summary']['allocation_details'][0]['amount'],'800.00')
+        raw=self.call('GET',f'/api/transactions/search?budget_system_id={self.daily}&transaction_types=income')
+        self.assertFalse(raw['summary']['allocation_complete'])
+        self.assertEqual(raw['summary']['budget_income_allocations'][0]['amount'],'0.00')
+        analysis=self.call('GET',f'/api/personal-cashflow/analysis?budget_system_id={self.daily}&transaction_type=income&start_date=2026-10-01&end_date=2026-10-31')
+        self.assertEqual(analysis['rate_coverage']['excluded_count'],1)
+        self.assertTrue(analysis['allocation_warnings'])
+        all_income=self.call('GET','/api/personal-cashflow/search?transaction_types=income&start_date=2026-10-01&end_date=2026-10-31')
+        self.assertEqual(all_income['summary']['valuations'][1]['income'],'500.00')
+        self.assertTrue(all_income['summary']['valuations'][1]['complete'])
+        self.assertFalse(self.overview()['execution']['rows'][0]['complete'])
+        book=load_workbook(BytesIO(self.client.get('/api/budget/overview.xlsx?end_month=2026-10').content))
+        self.assertEqual(book['收入预算分配']['G2'].value,800)
+        self.assertIsNone(book['收入预算分配']['L2'].value)
+        self.allocate(source,[self.item_for('500')])
+        self.assertTrue(self.personal_income()['summary']['budget_complete'])
+        self.assertEqual(self.personal_income()['summary']['valuations'][1]['income'],'500.00')
+
+    def test_cross_month_trace_explains_source_date_and_effective_month(self):
+        source=self.income()['id']
+        self.allocate(source,[self.item_for('400'),self.item_for('600',month='2026-11')])
+        data=self.personal_income()
+        self.assertEqual(data['summary']['valuations'][1]['income'],'1000.00')
+        trace=data['summary']['allocation_details']
+        self.assertEqual([(r['source_date'],r['month'],r['amount']) for r in trace],
+                         [('2026-10-05','2026-10','400.00'),('2026-10-05','2026-11','600.00')])
+        self.assertIn('不等于该月新增预算',data['summary']['allocation_note'])
+        self.assertEqual(self.personal_income('2026-11')['pagination']['total'],0)
+        self.assertEqual(self.overview()['execution']['rows'][0]['added'],'400.00')
+        self.assertEqual(self.overview('2026-11')['execution']['rows'][0]['added'],'600.00')
+        book=load_workbook(BytesIO(self.client.get('/api/budget/overview.xlsx?end_month=2026-11').content))
+        self.assertEqual(book['收入预算分配']['K3'].value,'2026-10-05')
+        self.assertEqual(book['收入预算分配']['A3'].value,'2026-11')
+
+    def test_cross_month_legacy_replacement_is_atomic_and_preserves_history(self):
+        old=self.plan(month='2026-09',currency='HKD',total='500',items=[self.item('200')])
+        source=self.income('500')['id']
+        original=self.call('GET','/api/accounts')
+        self.allocate(source,[self.item_for('500')],code=409)
+        self.assertEqual(self.overview()['execution']['rows'][0]['closing'],'500.00')
+        decision=[dict(plan_id=old['id'],action='replace')]
+        # Failed source validation must not retire the old budget.
+        self.allocate(source,[self.item_for('501')],legacy_decisions=decision,code=422)
+        self.assertEqual(self.call('GET',f'/api/budget/plans/{self.daily}/2026-09/HKD')['total'],'500.00')
+        self.allocate(source,[self.item_for('500')],legacy_decisions=decision)
+        old_now=self.call('GET',f'/api/budget/plans/{self.daily}/2026-09/HKD')
+        self.assertEqual((old_now['total'],old_now['allocated'],old_now['version']),('0.00','200.00',2))
+        self.assertEqual(self.overview()['execution']['rows'][0]['closing'],'500.00')
+        history=self.call('GET',f'/api/budget/plans/{self.daily}/2026-09/HKD/revisions')
+        self.assertTrue(any(r['plan']['total']=='500.00' for r in history))
+        self.assertEqual(self.call('GET','/api/accounts'),original)
+
+    def test_independent_legacy_review_expires_on_plan_revision_and_token_changes(self):
+        old=self.plan(month='2026-09',currency='HKD',total='500',items=[])
+        source=self.income('1000')['id']
+        stale=self.details(source)['token']
+        self.allocate(source,[self.item_for('100')],legacy_decisions=[dict(plan_id=old['id'],action='independent')])
+        row=self.overview()['execution']['rows'][0]
+        self.assertEqual(row['closing'],'600.00');self.assertEqual(row['legacy_plan_months'],[])
+        self.call('PUT',f'/api/budget/income-allocations/transaction/{source}',
+                  dict(expected_token=stale,items=[self.item_for('200')]),409)
+        self.allocate(source,[self.item_for('200')])
+        self.plan(month='2026-09',currency='HKD',total='600',items=[],version=old['version'])
+        self.assertEqual(self.overview()['execution']['rows'][0]['legacy_plan_months'],['2026-09'])
+        self.allocate(source,[self.item_for('300')],code=409)
+        # Removing funding remains possible while legacy review is pending.
+        self.allocate(source,[])
+        self.assertEqual(self.details(source)['items'],[])
+
+    def test_review_cannot_keep_same_month_or_touch_unrelated_plan(self):
+        old=self.plan(currency='HKD',total='500',items=[])
+        source=self.income()['id']
+        self.allocate(source,[self.item_for('500')],legacy_decisions=[dict(plan_id=old['id'],action='independent')],code=422)
+        other=self.setting('systems',name='其他',currency_code='HKD')['id']
+        self.allocate(source,[self.item_for('500',other)],legacy_decisions=[dict(plan_id=old['id'],action='replace')],code=409)
+        self.assertEqual(self.details(source)['items'],[])
+
+    def test_review_upgrade_backs_up_once_without_accepting_old_amounts(self):
+        self.plan(month='2026-09',currency='HKD',total='500',items=[])
+        with database.connect() as c:c.execute('DROP TABLE budget_legacy_reviews')
+        database.initialize_database();database.initialize_database()
+        self.assertEqual(len(list(database.BACKUP_DIR.glob('finance-pre-budget-review-*.db'))),1)
+        with database.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM budget_legacy_reviews').fetchone()[0],0)
+            self.assertIsNone(c.execute('PRAGMA foreign_key_check').fetchone())
+
+    def test_preexisting_mixed_legacy_funding_is_not_shown_as_verified_balance(self):
+        source=self.income('500',[self.item_for('500')])['id']
+        old=self.plan(month='2026-09',currency='HKD',total='500',items=[])
+        row=self.overview()['execution']['rows'][0]
+        self.assertFalse(row['complete']);self.assertIsNone(row['closing']);self.assertIsNone(row['available'])
+        self.assertEqual(row['expense'],'0.00')
+        self.assertTrue(any(w['entry_type']=='legacy_review' for w in row['warnings']))
+        self.allocate(source,[self.item_for('500')],legacy_decisions=[dict(plan_id=old['id'],action='replace')])
+        self.assertEqual(self.overview()['execution']['rows'][0]['closing'],'500.00')
+
 
 if __name__=='__main__':
     unittest.main()

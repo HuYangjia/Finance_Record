@@ -190,7 +190,9 @@ def search_personal(start_date: str | None = None, end_date: str | None = None,
                                       keyword, flagged_only, limit, offset, entry_type=entry_type, budget_system_id=budget_system_id)
     return {'basis': 'offset', 'filters': filters, 'budget_warnings': filters['budget_warnings'], 'pagination': {'limit': limit, 'offset': offset, 'total': len(entries)},
             'entries': [serialize_entry(e) for e in entries[offset:offset+limit]],
-            'summary': {**summarize(entries), 'budget_complete': not filters['budget_warnings']} if start_date and end_date else {'available': False, 'reason': '请选择完整日期范围后查看金额汇总。'}}
+            'summary': {**summarize(entries), 'budget_complete': not filters['budget_warnings'] and
+                        not any(e.get('allocation_basis') and any(not r['source_complete'] for r in e['income_allocations']) for e in entries)}
+                       if start_date and end_date else {'available': False, 'reason': '请选择完整日期范围后查看金额汇总。'}}
 
 
 @router.get('/api/offset-groups')
@@ -212,7 +214,9 @@ def analyze_personal(start_date: str, end_date: str, transaction_type: Literal['
         raise HTTPException(422, "冲销后收支不支持仅手工调整条件。")
     categories = category_ids if isinstance(category_ids, list) else []
     entries, filters = query_entries(start_date, end_date, [transaction_type], categories, involved_account_id, keyword, flagged_only, entry_type=entry_type, budget_system_id=budget_system_id)
-    return {**analyze(entries, start_date, end_date, transaction_type), 'budget_warnings': filters['budget_warnings']}
+    from app.income_allocations import allocation_metadata
+    return {**analyze(entries, start_date, end_date, transaction_type), 'budget_warnings': filters['budget_warnings'],
+            **allocation_metadata([r for e in entries for r in e.get('income_allocations',[])])}
 
 
 @router.get('/api/offset-candidates')

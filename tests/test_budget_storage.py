@@ -85,6 +85,45 @@ class StorageTest(unittest.TestCase):
         self.assertEqual((row['automatic_count'],row['pending_count']),(2,2))
         self.assertEqual(row['total'],'550.00')
 
+    def test_automatic_spending_precedes_month_end_transfer_and_next_month_carry(self):
+        cash=next(s['id'] for s in self.config['storage'] if s['name']=='活期')
+        self.setup_plan(total='100',allocations=[(cash,'100')])
+        self.transaction(amount='50')
+        before=self.call('GET','/api/accounts')
+        move=self.write('transfers',dict(month='2026-10',source_id=cash,destination_id=None,amount='50'),'POST',201)
+        balances=self.balances()
+        self.assertEqual((balances[str(cash)],balances['unallocated']),('0.00','50.00'))
+        self.assertEqual(self.balances('2026-11'),balances)
+        self.transaction(amount='20',day='2026-11-01')
+        self.assertEqual(self.balances('2026-11')['unallocated'],'30.00')
+        self.assertEqual(self.balances(),balances)
+        self.write(f"transfers/{move['id']}",dict(transfer_version=move['version']),'DELETE')
+        self.assertEqual(self.balances('2026-11')[str(cash)],'30.00')
+        self.assertEqual(self.balances('2026-11')['unallocated'],'0.00')
+
+    def test_future_funding_does_not_reassign_previous_cash_consumption(self):
+        cash=next(s['id'] for s in self.config['storage'] if s['name']=='活期')
+        self.setup_plan(total='100',allocations=[(cash,'100')])
+        self.transaction(amount='80')
+        self.setup_plan(month='2026-11',total='100',allocations=[])
+        balances=self.balances('2026-11')
+        self.assertEqual((balances[str(cash)],balances['unallocated']),('20.00','100.00'))
+        self.transaction(amount='150',day='2026-11-01')
+        self.assertEqual(self.balances('2026-11')['pending'],'-30.00')
+        self.setup_plan(month='2026-12',total='40',allocations=[])
+        balances=self.balances('2026-12')
+        self.assertEqual((balances['pending'],balances['unallocated']),('0.00','10.00'))
+
+    def test_negative_automatic_expense_restores_unallocated_not_previously_used_cash(self):
+        cash=next(s['id'] for s in self.config['storage'] if s['name']=='活期')
+        self.setup_plan(total='300',allocations=[(cash,'300')])
+        self.transaction(amount='200',day='2026-10-01')
+        paid=self.transaction(amount='10',day='2026-10-02')['id']
+        refund=self.transaction(kind='income',amount='60',day='2026-10-03')['id']
+        self.call('POST','/api/offset-groups',dict(title='超额回款',kind='expense',transaction_ids=[paid,refund]),201)
+        balances=self.balances()
+        self.assertEqual((balances[str(cash)],balances['unallocated']),('100.00','50.00'))
+
     def test_complete_aa_negative_refund_salary_excluded_override_and_dissolve(self):
         self.setup_plan();self.default(self.cash)
         expense=self.transaction(amount='600')['id'];refund=self.transaction(kind='income',amount='350')['id']

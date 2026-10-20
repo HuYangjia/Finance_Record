@@ -725,12 +725,14 @@ function createSearchSummarySection(title, records, currencyLabel, includeCovera
 function renderTransactionSearchSummary(summary) {
   transactionSearchSummaryContent.replaceChildren();
   transactionSearchSummaryMeta.textContent = "";
-  if(summary.budget_income_allocations?.length){
+  if(summary.budget_income_allocations?.length||Number(searchBudgetSelect.value)>0){
     const section=BudgetUI.node('section','','budget-allocation-summary');
-    section.append(BudgetUI.node('h3',searchBudgetSelect.value?'分配给所选预算的收入':'已分配到预算的收入'));
+    section.append(BudgetUI.node('h3',searchBudgetSelect.value?'分配给所选预算的收入（已核实部分）':'已分配到预算的收入（已核实部分）'));
     for(const row of summary.budget_income_allocations)section.append(BudgetUI.node('strong',`${row.amount} ${row.currency_code} `));
-    section.append(BudgetUI.node('p',summary.allocation_note,'subtle-note'));transactionSearchSummaryContent.append(section);
+    if(!summary.budget_income_allocations.length)section.append(BudgetUI.node('p','匹配来源没有分配给所选预算的收入，分配合计为 0。'));
+    transactionSearchSummaryContent.append(section);
   }
+  IncomeAllocations.renderTrace(transactionSearchSummaryContent,summary);
 
   if (!summary.available) {
     const notice = document.createElement("div");
@@ -1092,6 +1094,7 @@ function createDistributionTable(title, records, amountLabel, includeAmountShare
 function renderTransactionAnalysis(data) {
   analysisContent.replaceChildren();
   analysisConstraint.hidden = true;
+  if(Number(searchBudgetSelect.value)>0&&data.allocation_warnings?.length)analysisContent.append(createAnalysisSummary('收入来源存在超配或无法核实的分配，未计入本图；请按上方来源提示核对，当前仅展示可核实部分。'));
   if(searchBudgetSelect.value && data.transaction_type==='income'){
     analysisContent.append(createAnalysisSummary(data.basis==='offset'
       ? '已分配收入按所选预算的份额计算，展开记录仍可查看原始到账。'
@@ -1190,7 +1193,7 @@ async function loadTransactionAnalysis(serial = searchRequestId) {
     const data = await request(buildAnalysisPath());
     if (serial !== searchRequestId) return;
     renderTransactionAnalysis(data);
-    setStatus(analysisStatus, data.budget_warnings?.length ? '按 HKD 统计 · 未包含跨预算待归属事项' : "已按 HKD 统计", "success");
+    setStatus(analysisStatus, Number(searchBudgetSelect.value)>0&&data.allocation_warnings?.length?'按 HKD 统计 · 分配来源待核实，仅显示已核实部分':data.budget_warnings?.length ? '按 HKD 统计 · 未包含跨预算待归属事项' : "已按 HKD 统计", "success");
   } catch (error) {
     if (serial !== searchRequestId) return;
     analysisConstraint.textContent = error.message;

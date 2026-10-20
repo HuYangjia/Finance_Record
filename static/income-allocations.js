@@ -114,14 +114,27 @@ window.IncomeAllocations = (() => {
   function refreshLegacy() {
     if(!current)return;
     const checked=new Set([...legacy.querySelectorAll('input:checked')].map(el=>Number(el.value)));
-    legacy.replaceChildren();const ids=new Set();
-    for(const el of rows.children) {
-      const system=Number(el.querySelector('select').value),month=el.querySelector('[type=month]').value;
-      const p=current.plans.find(p=>p.budget_system_id===system&&p.month===month&&p.funding_mode==='legacy');
-      if(!p||ids.has(p.id))continue;ids.add(p.id);
-      const checkbox=input('checkbox');checkbox.value=p.id;checkbox.checked=checked.has(p.id);checkbox.required=true;
-      const label=field(`替代 ${current.config.systems.find(s=>s.id===system)?.name} · ${month} 的历史手填总额 ${p.total} ${p.currency_code}（保留存储安排，不重复累计）`,checkbox);
-      legacy.append(label);
+    const choices=new Map([...legacy.querySelectorAll('select[data-plan-id]')].map(el=>[Number(el.dataset.planId),el.value]));
+    legacy.replaceChildren();
+    const targets=draftItems();
+    for(const p of current.legacy_plans||[]) {
+      if(!targets.some(i=>i.budget_system_id===p.budget_system_id))continue;
+      const same=targets.some(i=>i.budget_system_id===p.budget_system_id&&i.month===p.month);
+      if(!same&&(p.legacy_reviewed||Number(p.total)===0))continue;
+      if(!legacy.children.length)legacy.append(node('strong','核对历史额度，避免跨月重复累计'),
+        node('p','下列旧额度缺少收入来源。替代会移除旧贡献并重算结转，保留原存储安排（可能需要调整）；独立资金只适用于与本次收入无关的旧额度。','subtle-note'));
+      if(same){
+        const checkbox=input('checkbox');checkbox.value=p.id;checkbox.checked=checked.has(p.id);checkbox.required=true;
+        legacy.append(field(`替代 ${p.system_name} · ${p.month} 的历史手填总额 ${p.total} ${p.currency_code}（保留存储安排，不重复累计）`,checkbox));
+      }else{
+        const select=node('select');select.dataset.planId=p.id;select.required=true;
+        for(const [value,title] of [['','请选择处理方式'],['replace','替代重复额度：旧总额归零'],['independent','保留为独立资金：与本次收入无关']]){
+          const option=node('option',title);option.value=value;select.append(option);
+        }
+        select.value=choices.get(p.id)||'';
+        const label=field(`${p.system_name} · ${p.month} · 历史额度 ${p.total} ${p.currency_code}`,select);
+        label.className='legacy-decision';legacy.append(label);
+      }
     }
   }
   function addRow(initial={}) {
@@ -153,7 +166,8 @@ window.IncomeAllocations = (() => {
     busy=true;form.inert=true;error.textContent='';
     try {
       await request(`/api/budget/income-allocations/${currentKey.kind}/${currentKey.id}`,{expected_token:current.token,items,
-        replace_legacy_plan_ids:[...legacy.querySelectorAll('input:checked')].map(el=>Number(el.value))},'PUT');
+        replace_legacy_plan_ids:[...legacy.querySelectorAll('input:checked')].map(el=>Number(el.value)),
+        legacy_decisions:[...legacy.querySelectorAll('select[data-plan-id]')].map(el=>({plan_id:Number(el.dataset.planId),action:el.value}))},'PUT');
       dirty=false;editor.close();
       try{await done?.();}catch(e){alert(`分配已保存，刷新失败：${e.message}。请刷新页面。`);}
     }catch(e){error.textContent=e.message;error.scrollIntoView({block:'nearest'});}
@@ -175,5 +189,26 @@ window.IncomeAllocations = (() => {
       return [...parts.children].map(row=>({budget_system_id:Number(row.querySelector('select').value),amount:rowAmount(row)}));
     }};
   }
-  return {browse,open,entry};
+  function renderTrace(host,data) {
+    if(data.allocation_note)host.append(node('p',data.allocation_note,'subtle-note allocation-date-note'));
+    for(const warning of data.allocation_warnings||[]){
+      const p=node('p','','funding-warning'),link=node('a',warning.title);link.href=warning.url;
+      p.append(link,document.createTextNode(`：${warning.reason}。未计入已核实预算收入，请修改分配。`));host.append(p);
+    }
+    if(!data.allocation_details?.length)return;
+    const details=node('details','','allocation-trace'),wrap=node('div','','table-wrap'),table=node('table');
+    details.append(node('summary','查看收入来源与预算生效月份'));
+    const head=node('thead'),heading=node('tr');
+    for(const title of ['来源发生／统计日','收入来源','预算生效月','预算','已记录分配','状态'])heading.append(node('th',title));
+    head.append(heading);table.append(head);const body=node('tbody');
+    for(const r of data.allocation_details){
+      const tr=node('tr'),source=node('td'),link=node('a',r.source_title);link.href=r.source_url;source.append(link);
+      const month=node('td'),budgetLink=node('a',r.month);
+      budgetLink.href=`/budgets?month=${encodeURIComponent(r.month)}&system=${r.budget_system_id}`;month.append(budgetLink);
+      tr.append(node('td',r.source_date||'待核对'),source,month,node('td',r.budget_name),
+        node('td',`${r.amount} ${r.budget_currency}`),node('td',r.source_status,r.source_complete?'':'funding-warning'));body.append(tr);
+    }
+    table.append(body);wrap.append(table);details.append(wrap);host.append(details);
+  }
+  return {browse,open,entry,renderTrace};
 })();

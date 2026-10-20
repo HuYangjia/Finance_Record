@@ -81,19 +81,11 @@ def storage_report(c, end_month, system_id=None, currency_code=None, execution=N
         used_default = defaults.get(sid)
         if used_default:
             balances[storage_key(used_default)] += 0
-        for p in plans:
-            if p['budget_system_id']!=sid or p['currency_code']!=code or not origin<=p['month']<=end_month:
-                continue
-            allocated = sum(i['amount_minor'] for i in items[p['id']])
-            balances['unallocated'] += (p['total_minor'] if p['total_minor'] is not None else allocated)-allocated
-            for item in items[p['id']]:
-                balances[storage_key(item['storage_method_id'])] += item['amount_minor']
+        system_plans = [p for p in plans if p['budget_system_id']==sid and
+                        p['currency_code']==code and origin<=p['month']<=end_month]
         moves = transfers_data(c,sid)
-        for move in moves:
-            if origin<=move['month']<=end_month and move['currency_code']==code:
-                balances[storage_key(move['source_id'])] -= move['amount_minor']
-                balances[storage_key(move['destination_id'])] += move['amount_minor']
-        monthly = defaultdict(list); expense_rows = []; automatic_rows = []
+        system_moves = [m for m in moves if origin<=m['month']<=end_month and m['currency_code']==code]
+        monthly = defaultdict(list); expense_rows = []; rounded = defaultdict(list)
         for entry in entries:
             if entry['kind']!='expense' or entry['budget_mixed'] or entry['budget_system_id']!=sid or not origin<=entry['statistics_date'][:7]<=end_month:
                 continue
@@ -117,26 +109,22 @@ def storage_report(c, end_month, system_id=None, currency_code=None, execution=N
                 floor = int(scaled.to_integral_value(rounding=ROUND_FLOOR))
                 monthly[entry['statistics_date'][:7]].append((row,scaled,floor))
         # Round once per month, as execution does; distribute sub-cent remainders deterministically.
-        for values in monthly.values():
+        for month,values in monthly.items():
             target = int(sum((v[1] for v in values),Decimal(0)).quantize(Decimal(1),rounding=ROUND_HALF_UP))
             remainder = target-sum(v[2] for v in values)
             ordered = sorted(values,key=lambda v:(-(v[1]-v[2]),v[0]['date'],v[0]['entry_type'],v[0]['entry_id']))
             for index,(row,_,floor) in enumerate(ordered):
                 amount = floor+int(index<remainder)
                 row['amount'] = money(amount,places)
-                if row['key'] is None:
-                    automatic_rows.append((row,amount))
-                else:
-                    balances[row['key']] -= amount
-        automatic_total = sum(amount for _,amount in automatic_rows)
-        automatic_unallocated = automatic_cash = pending_amount = 0
-        if automatic_total < 0:
-            # With no explicit storage to restore, a net refund becomes newly unallocated budget.
-            balances['unallocated'] -= automatic_total
-        elif automatic_total > 0:
-            automatic_unallocated = min(automatic_total,max(balances['unallocated'],0))
-            balances['unallocated'] -= automatic_unallocated
-            remaining = automatic_total-automatic_unallocated
+                rounded[month].append((row,amount))
+        automatic_unallocated = automatic_cash = automatic_count = positive_count = 0
+
+        def absorb(amount):
+            nonlocal automatic_unallocated, automatic_cash
+            used = min(amount,max(balances['unallocated'],0))
+            balances['unallocated'] -= used
+            automatic_unallocated += used
+            remaining = amount-used
             for cash_key in cash_keys:
                 used = min(remaining,max(balances.get(cash_key,0),0))
                 balances[cash_key] -= used
@@ -144,9 +132,40 @@ def storage_report(c, end_month, system_id=None, currency_code=None, execution=N
                 remaining -= used
                 if not remaining:
                     break
-            pending_amount = remaining
-            balances['pending'] -= pending_amount
-        pending_count = sum(amount>0 for _,amount in automatic_rows) if pending_amount else 0
+            return remaining
+
+        months = sorted({end_month}|{p['month'] for p in system_plans}|set(rounded)|{m['month'] for m in system_moves})
+        for month in months:
+            for p in system_plans:
+                if p['month']!=month:
+                    continue
+                allocated = sum(i['amount_minor'] for i in items[p['id']])
+                balances['unallocated'] += (p['total_minor'] if p['total_minor'] is not None else allocated)-allocated
+                for item in items[p['id']]:
+                    balances[storage_key(item['storage_method_id'])] += item['amount_minor']
+            # Explicit attribution takes precedence over automatic fallback.
+            for row,amount in rounded[month]:
+                if row['key'] is not None:
+                    balances[row['key']] -= amount
+            balances['pending'] = -absorb(-balances['pending'])
+            for row,amount in sorted(rounded[month],key=lambda v:(v[0]['date'],v[0]['entry_type'],v[0]['entry_id'])):
+                if row['key'] is not None:
+                    continue
+                automatic_count += 1
+                positive_count += int(amount>0)
+                if amount<0:
+                    balances['unallocated'] -= amount
+                    balances['pending'] = -absorb(-balances['pending'])
+                else:
+                    balances['pending'] -= absorb(amount)
+            # Monthly transfers adjust the balances AFTER consumption. They must
+            # not change the storage already consumed in this or earlier months.
+            for move in system_moves:
+                if move['month']==month:
+                    balances[storage_key(move['source_id'])] -= move['amount_minor']
+                    balances[storage_key(move['destination_id'])] += move['amount_minor']
+        pending_amount = -balances['pending']
+        pending_count = positive_count if pending_amount else 0
         cells = []
         for key,value in balances.items():
             item = storage.get(int(key)) if key.isdigit() else None
@@ -163,7 +182,7 @@ def storage_report(c, end_month, system_id=None, currency_code=None, execution=N
                    decimal_places=places,month=end_month,origin_month=origin,complete=complete,reason=execution_row['reason'],
                    total=execution_row['closing'],default_storage_method_id=used_default,
                    pending_count=pending_count,negative=complete and any(v<0 for k,v in balances.items() if k!='pending'),
-                   pending_amount=money(pending_amount,places),automatic_count=len(automatic_rows),
+                   pending_amount=money(pending_amount,places),automatic_count=automatic_count,
                    automatic_unallocated=money(automatic_unallocated,places),automatic_cash=money(automatic_cash,places),
                    automatic_cash_storage_id=cash_root['id'] if cash_root else None,
                    cells=cells,funding_warnings=execution_row.get('funding_warnings',[]),warnings=execution_row['warnings'],

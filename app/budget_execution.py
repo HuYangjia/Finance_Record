@@ -44,6 +44,7 @@ def execution_report(c, end_month, start_month=None, system_id=None, currency_co
         raise HTTPException(422,'币种不存在。')
     currencies={r['code']:r['decimal_places'] for r in config['currencies']}
     plans=defaultdict(list)
+    reviews={r['plan_id']:r['plan_version'] for r in c.execute('SELECT * FROM budget_legacy_reviews')}
     for row in c.execute('''SELECT p.*,COALESCE(p.total_minor,(SELECT SUM(i.amount_minor)
             FROM budget_plan_items i WHERE i.plan_id=p.id),0) AS budget_total FROM budget_plans p'''):
         plans[row['budget_system_id']].append(dict(row))
@@ -126,6 +127,15 @@ def execution_report(c, end_month, start_month=None, system_id=None, currency_co
             source_issues=[dict(month=month,title=w['title'],reason=w['status'],
                                entry_type='income_allocation',entry_id=None)
                            for w in funding_issues[sid] if w['income_mode'] and w['month']==month]
+            legacy_months=[p['month'] for p in plans[sid] if origin<=p['month']<=month
+                           and p['funding_mode']=='legacy' and p['budget_total']>0
+                           and reviews.get(p['id'])!=p['version']
+                           and not any(b['plan_id']==p['id'] for b in funding.bindings)]
+            if legacy_months and any(p['funding_mode']=='income' and p['budget_total']>0
+                                     and origin<=p['month']<=month for p in plans[sid]):
+                source_issues.append(dict(month=month,title='历史额度待核对',
+                    reason='新收入与历史手填额度同时累计，请在“分配收入”中替代重复额度或确认独立资金',
+                    entry_type='legacy_review',entry_id=None))
             past_issues.extend(source_issues)
             complete=complete and not issues[month] and not source_issues
             balance+=deposits[month]-spent
@@ -135,9 +145,7 @@ def execution_report(c, end_month, start_month=None, system_id=None, currency_co
                 rows.append(dict(budget_system_id=sid,system_name=system['name'],currency_code=code,month=month,
                                  origin_month=origin,origin_automatic=not system['execution_start_month'],started=True,
                                  compiled=month in compiled,complete=complete,reason=reason,
-                                 legacy_plan_months=[p['month'] for p in plans[sid] if origin<=p['month']<=month
-                                     and p['funding_mode']=='legacy' and p['budget_total']>0
-                                     and not any(b['plan_id']==p['id'] for b in funding.bindings)],
+                                 legacy_plan_months=legacy_months,
                                  warnings=list(past_issues),funding_warnings=[w for w in funding_issues[sid] if origin<=w['month']<=month],entry_count=counts[month],nearest_count=nearest[month],
                                  prior_nearest_count=prior_nearest,known_expense=money(spent,places),
                                  **{key:money(value,places) if value is not None else None for key,value in amounts.items()}))

@@ -49,3 +49,8 @@
 .currency-total[readonly] { background: #edf5ef; font-weight: 700; }
 .budget-allocation-summary { padding: 16px; background: #eef6f0; border-radius: 12px; margin-bottom: 16px; }
 .budget-allocation-summary h3 { margin: 0 0 8px; }
+.allocation-legacy .legacy-decision { display: grid; align-items: start; gap: 8px; }
+.allocation-legacy .legacy-decision select { width: 100%; }
+.allocation-trace { margin: 12px 0; }
+.allocation-trace summary { cursor: pointer; font-weight: 600; }
+.allocation-trace th, .allocation-trace td { padding: 10px 12px; }

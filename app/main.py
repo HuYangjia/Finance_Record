@@ -3307,10 +3307,11 @@ def search_transactions(
                 "SELECT code, decimal_places FROM currencies"
             ).fetchall()
         }
-        from app.income_allocations import allocations_for_transactions
+        from app.income_allocations import allocations_for_transactions, allocation_metadata
         allocation_rows, allocation_totals = allocations_for_transactions(
             connection, [r['id'] for r in summary_rows if r['transaction_type']=='income'],
             budget_system_id)
+        allocation_info = allocation_metadata([r for rows in allocation_rows.values() for r in rows])
 
     transactions = [
         {
@@ -3362,7 +3363,7 @@ def search_transactions(
         currency_decimal_places,
     )
     summary['budget_income_allocations'] = allocation_totals
-    summary['allocation_note'] = '预算分配按匹配的完整收入来源计算，每个来源只计一次；下方原始收付仍展示实际到账总额。'
+    summary.update(allocation_info)
     for transaction in transactions:
         transaction['income_allocations'] = allocation_rows.get(transaction['id'],[])
     return {

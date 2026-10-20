@@ -70,6 +70,12 @@ CREATE TABLE IF NOT EXISTS budget_income_allocations (
 );
 CREATE INDEX IF NOT EXISTS budget_allocation_transaction ON budget_income_allocations(transaction_id);
 CREATE INDEX IF NOT EXISTS budget_allocation_group ON budget_income_allocations(group_id);
+CREATE TABLE IF NOT EXISTS budget_legacy_reviews (
+    plan_id INTEGER PRIMARY KEY REFERENCES budget_plans(id) ON DELETE CASCADE,
+    plan_version INTEGER NOT NULL,
+    decision TEXT NOT NULL CHECK(decision='independent'),
+    reviewed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS budget_storage_defaults (
     budget_system_id INTEGER PRIMARY KEY REFERENCES budget_systems(id) ON DELETE RESTRICT,
     storage_method_id INTEGER NOT NULL REFERENCES budget_storage_methods(id) ON DELETE RESTRICT

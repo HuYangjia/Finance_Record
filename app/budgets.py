@@ -428,6 +428,8 @@ def plan_data(c, system_id, month, code):
     from app.budget_funding import FundingCatalog
     data['funding'] = FundingCatalog(c).for_plan(data['id']) if data['id'] and c.execute('SELECT 1 FROM budget_plan_funding WHERE plan_id=?',(data['id'],)).fetchone() else None
     data['funding_sources'] = FundingCatalog(c).plan_sources(data['id']) if data['id'] else []
+    data['legacy_reviewed'] = bool(plan and c.execute(
+        'SELECT 1 FROM budget_legacy_reviews WHERE plan_id=? AND plan_version=?',(plan['id'],plan['version'])).fetchone())
     return data
 
 
@@ -683,6 +685,7 @@ def budget_overview(end_month: str, start_month: str = '0001-01', system_id: int
                         legacy_purpose=purposes[item['purpose_id']]['path'] if not purposes[item['purpose_id']]['is_placeholder'] else '')
         from app.budget_funding import FundingCatalog
         funding=FundingCatalog(c)
+        reviews={r['plan_id']:r['plan_version'] for r in c.execute('SELECT * FROM budget_legacy_reviews')}
         for p in plans:
             places=currencies[p['currency_code']]['decimal_places']
             allocated=sum(i['amount_minor'] for i in by_plan[p['id']])
@@ -692,6 +695,7 @@ def budget_overview(end_month: str, start_month: str = '0001-01', system_id: int
                      budget_total_minor=total,allocated_minor=allocated,unallocated_minor=total-allocated,
                      total_inferred=p['total_minor'] is None,items=by_plan[p['id']],
                      funding=funding.for_plan(p['id']),funding_sources=funding.plan_sources(p['id']))
+            p['legacy_reviewed'] = reviews.get(p['id'])==p['version']
         blocks=[]
         for code in sorted({p['currency_code'] for p in plans}):
             places=currencies[code]['decimal_places']; selected=[p for p in plans if p['currency_code']==code]
@@ -725,14 +729,16 @@ def budget_overview_export(end_month: str, start_month: str = '0001-01', system_
         sources=p.get('funding_sources',[])
         sheet.append([p['month'],safe(p['system_name']),p['currency_code'],Decimal(p['budget_total']),Decimal(p['allocated']),Decimal(p['unallocated']),safe(p['note']),
                       safe('；'.join(s['title'] for s in sources)),safe('；'.join(s['status'] for s in sources)) if sources else
-                      ('收入分配为零' if p.get('funding_mode')=='income' else '历史手填 · 未核实来源')])
+                      ('收入分配为零' if p.get('funding_mode')=='income' else
+                       '历史手填 · 已确认为独立资金' if p.get('legacy_reviewed') else '历史手填 · 未核实来源')])
     sheet.freeze_panes='A2'; sheet=book.create_sheet('收入预算分配')
-    sheet.append(['月份','预算','预算币种','收入来源','来源类型','来源编号','分配金额','来源净收入','来源币种','状态'])
+    sheet.append(['预算生效月份','预算','预算币种','收入来源','来源类型','来源编号','已记录分配金额','来源净收入','来源币种','状态','来源发生／统计日期','已核实分配金额'])
     for p in data['plans']:
         for source in p.get('funding_sources',[]):
             sheet.append([p['month'],safe(p['system_name']),p['currency_code'],safe(source['title']),
                           source['entry_type'],source['entry_id'],Decimal(source['allocated_to_plan']) if source['allocated_to_plan'] is not None else None,
-                          Decimal(source['net']) if source['net'] is not None else None,source['currency_code'],safe(source['status'])])
+                          Decimal(source['net']) if source['net'] is not None else None,source['currency_code'],safe(source['status']),
+                          source['date'],Decimal(source['allocated_to_plan']) if source['complete'] and not source['overallocated'] and source['allocated_to_plan'] is not None else None])
     sheet.freeze_panes='A2'; sheet=book.create_sheet('二级存储分配')
     sheet.append(['月份','用途（预算系统）','币种','存储方式','金额','明细名称','备注','历史用途标签'])
     for i in data['items']:

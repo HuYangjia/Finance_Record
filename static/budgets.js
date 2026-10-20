@@ -49,7 +49,7 @@
     if(!rows.length)host.append(node('p','这个月还没有收入分配。点击“分配收入”，选择已有收入并安排用途。','plan-empty'));
     else{
       const table=node('table'),head=node('thead'),tr=node('tr');for(const title of ['用途（预算系统）','总预算','已分配存储','待分配','收入来源','操作'])tr.append(node('th',title));head.append(tr);table.append(head);const body=node('tbody');
-      for(const id of new Set(rows.map(p=>p.budget_system_id))){const list=rows.filter(p=>p.budget_system_id===id),p=list[0],tr=node('tr');tr.dataset.systemId=id;tr.append(node('td',p.system_name));for(const field of ['budget_total','allocated','unallocated']){const td=node('td');for(const row of list)td.append(node('div',`${row[field]} ${row.currency_code}`,'currency-line'));tr.append(td);}const sourceCell=node('td');sourceCell.append(node('small',p.funding_mode==='income'?'由收入自动汇总':'历史手填 · 待核对来源','subtle-note'));for(const source of p.funding_sources||[])sourceCell.append(fundingLabel(source,p.currency_code));tr.append(sourceCell);const td=node('td');td.append(button(p.is_active?'安排存储 / 查看来源':'查看预案',()=>action(()=>openEditor({system:id,month:p.month}))));tr.append(td);body.append(tr);}table.append(body);host.append(table);
+      for(const id of new Set(rows.map(p=>p.budget_system_id))){const list=rows.filter(p=>p.budget_system_id===id),p=list[0],tr=node('tr');tr.dataset.systemId=id;tr.append(node('td',p.system_name));for(const field of ['budget_total','allocated','unallocated']){const td=node('td');for(const row of list)td.append(node('div',`${row[field]} ${row.currency_code}`,'currency-line'));tr.append(td);}const sourceCell=node('td');sourceCell.append(node('small',p.funding_mode==='income'?'由收入自动汇总':p.legacy_reviewed?'历史手填 · 已核对独立资金':'历史手填 · 待核对来源','subtle-note'));for(const source of p.funding_sources||[])sourceCell.append(fundingLabel(source,p.currency_code));tr.append(sourceCell);const td=node('td');td.append(button(p.is_active?'安排存储 / 查看来源':'查看预案',()=>action(()=>openEditor({system:id,month:p.month}))));tr.append(td);body.append(tr);}table.append(body);host.append(table);
     }
     renderMatrix();renderExecution();
   }
@@ -58,6 +58,7 @@
     if(!source){host.append(node('span','未绑定来源','subtle-note'));return host;}
     const link=node('a',source.title);link.href=source.url;link.target='_blank';link.rel='noopener';host.append(link);
     if(source.allocated_to_plan!=null)host.append(node('small',`本预算分配 ${source.allocated_to_plan} ${code||''}`,'subtle-note'));
+    host.append(node('small',`来源发生／统计日 ${source.date||'待核对'}；额度计入当前预案月份`,'subtle-note'));
     host.append(node('small',source.status,source.reason||source.overallocated?'funding-warning':'subtle-note'));return host;
   }
   function executionTable(rows,history=false){
@@ -82,6 +83,7 @@
   }
   function renderExecution(){
     const host=$('budget-execution');host.replaceChildren();const rows=overview.execution?.rows||[];
+    host.append(node('p','本月新增按预算生效月份汇总；第三页按收入发生日／事项统计日查询。跨月安排可在预案的收入来源中追溯。','subtle-note'));
     if(rows.length)host.append(executionTable(rows));else host.append(node('p','所选范围暂无预算系统。','plan-empty'));
   }
   async function showExecutionHistory(row){
@@ -155,7 +157,7 @@
       g.el.append(button('＋追加其他收入',()=>{if(!allowDiscard())return;const key={...identity};IncomeAllocations.browse(async()=>{dirty=false;await openEditor(key);await reload(false);},key);}));
       g.funding={schedule(){},dispose(){},async payload(){return null;}};
     }else{
-      g.el.append(node('p','历史手填预案：请通过“分配收入”认领来源并替代旧总额。迁移前保留原金额。','funding-warning'));
+      g.el.append(node('p',saved?.legacy_reviewed?'历史手填预案：此版本已确认为独立资金。修改后需重新核对。':'历史手填预案：请通过“分配收入”核对；可替代重复额度，跨月独立资金须明确确认。','funding-warning'));
       g.funding=BudgetFunding.create(g.el,saved?.funding||null,()=>({planId:g.saved.id,code:g.code,total:g.total.value}),changed);
     }
     if(saved?.id&&saved.total===null)g.el.append(node('p','旧计划未填总额，暂按原明细合计展示，确认后保存。','subtle-note'));
@@ -246,5 +248,9 @@
   $('budget-export').onclick=()=>{if(scope)location.href=`/api/budget/overview.xlsx?${query()}`;};$('matrix-scope').onchange=renderMatrix;$('matrix-level').onchange=renderMatrix;$('matrix-transpose').onclick=()=>{transpose=!transpose;renderMatrix();};
   document.querySelector('[data-budget-close]').onclick=()=>$('budget-detail-dialog').close();window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
   $('plan-form').prepend(Object.assign(node('p'),{id:'plan-error',role:'alert',className:'dialog-status error'}));
-  $('plan-month').value=currentMonth();action(async()=>{config=await request('/api/budget/config');options($('plan-system'),config.systems,'全部用途','');options($('plan-currency'),config.currencies,'全部币种','');await reload();});
+  const initialQuery=new URLSearchParams(location.search);
+  $('plan-month').value=validMonth(initialQuery.get('month')||'')?initialQuery.get('month'):currentMonth();
+  action(async()=>{config=await request('/api/budget/config');const system=initialQuery.get('system')||'';
+    options($('plan-system'),config.systems,'全部用途',config.systems.some(s=>String(s.id)===system)?system:'');
+    options($('plan-currency'),config.currencies,'全部币种','');await reload();});
 })();

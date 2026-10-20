@@ -18,13 +18,14 @@ window.OffsetUI = (() => {
     return element;
   }
   function coverage(value) {
+    if(value.funding_issue)return value.funding_issue;
     if (!value.available) return `无法完整换算（${value.missing_currencies.join('、')}）`;
     const c = value.coverage;
     return `原币 ${c.direct} 笔 · 当日汇率 ${c.exact} 笔 · 邻近汇率 ${c.nearest} 笔`;
   }
   function net(entry, currency) {
     const v = entry.valuations[currency];
-    const result = node('span', v.available ? `${v.amount} ${currency}` : '无法完整换算');
+    const result = node('span', v.available ? `${v.amount} ${currency}` : v.funding_issue?'来源待核实':'无法完整换算');
     result.title = coverage(v);
     if (Number(v.amount) < 0) result.classList.add('negative-amount');
     return result;
@@ -33,10 +34,11 @@ window.OffsetUI = (() => {
     target.replaceChildren();
     if (!data?.available) { target.append(node('p', data?.reason || '请选择完整日期范围。', 'empty-notice')); return; }
     target.append(node('p', `${data.entry_count} 条统计记录，涉及 ${data.transaction_count} 笔原始流水；按已关联流水计算。`, 'analysis-summary'));
+    window.IncomeAllocations?.renderTrace(target,data);
     const grid = node('div', '', 'metric-grid');
     for (const v of data.valuations) {
       const card = node('article', '', 'metric-item');
-      card.append(node('h3', `${v.currency_code} · ${data.budget_complete===false?'仅已归属事项 · ':''}${v.complete ? '汇率完整' : '仅可计算部分'}`));
+      card.append(node('h3', `${v.currency_code} · ${data.budget_complete===false?'预算统计未完整 · ':''}${v.complete ? '汇率完整' : '仅已核实部分'}`));
       for (const [name, amount] of [['收入', v.income], ['支出', v.expense], ['结余', v.balance]]) {
         const row = node('div'); row.append(node('span', name), node('strong', amount)); card.append(row);
       }

@@ -20,15 +20,34 @@ class AllocationItem(BaseModel):
     amount: Decimal | None = Field(default=None, gt=0)
 
 
+class LegacyDecision(BaseModel):
+    plan_id: int = Field(gt=0)
+    action: Literal['replace', 'independent']
+
+
 class AllocationWrite(BaseModel):
     expected_token: str = Field(min_length=64, max_length=64)
     items: list[AllocationItem] = Field(default_factory=list, max_length=300)
     replace_legacy_plan_ids: list[int] = Field(default_factory=list, max_length=300)
+    legacy_decisions: list[LegacyDecision] = Field(default_factory=list, max_length=300)
 
 
 def allocation_snapshot(c):
     return {name: [dict(r) for r in c.execute(f'SELECT * FROM {name} ORDER BY 1')]
-            for name in ('budget_income_allocations', 'budget_plan_funding', 'budget_plans')}
+            for name in ('budget_income_allocations', 'budget_plan_funding', 'budget_plans', 'budget_legacy_reviews')}
+
+
+def legacy_plans(c):
+    """No inference from old income tags: these amounts require explicit review."""
+    return [dict(r) for r in c.execute('''SELECT p.*,b.name AS system_name,
+        COALESCE(p.total_minor,(SELECT SUM(amount_minor) FROM budget_plan_items WHERE plan_id=p.id),0) AS budget_total,
+        COALESCE(r.plan_version=p.version,0) AS legacy_reviewed
+        FROM budget_plans p JOIN budget_systems b ON b.id=p.budget_system_id
+        LEFT JOIN budget_legacy_reviews r ON r.plan_id=p.id
+        WHERE p.funding_mode='legacy'
+        AND NOT EXISTS (SELECT 1 FROM budget_plan_funding f WHERE f.plan_id=p.id)
+        AND NOT EXISTS (SELECT 1 FROM budget_income_allocations a WHERE a.plan_id=p.id)
+        ORDER BY p.month,p.id''')]
 
 
 def allocation_token(c, catalog, source):
@@ -54,8 +73,11 @@ def source_detail(c, kind, entry_id):
         if total is None:
             total = c.execute('SELECT COALESCE(SUM(amount_minor),0) FROM budget_plan_items WHERE plan_id=?', (p['id'],)).fetchone()[0]
         p['total'] = money(total, currency(c,p['currency_code']))
+    historical = legacy_plans(c)
+    for p in historical:
+        p['total'] = money(p['budget_total'],currency(c,p['currency_code']))
     return dict(source=source, items=rows, config=config, plans=plans,
-                token=allocation_token(c,catalog,source))
+                legacy_plans=historical,token=allocation_token(c,catalog,source))
 
 
 def record_plan_revision(c, plan_id):
@@ -112,15 +134,51 @@ def resolve_remainder(c, catalog, source, items):
     return resolved
 
 
-def save_allocations(c, kind, entry_id, items, replace_legacy=(), expected_token=None):
+def review_legacy(c, items, source_date, replace_legacy, decisions):
+    targets = {(i.budget_system_id,valid_month(i.month or (source_date or '')[:7])) for i in items}
+    systems = {sid for sid,_ in targets}
+    candidates = {p['id']:p for p in legacy_plans(c) if p['budget_system_id'] in systems and
+                  ((p['budget_system_id'],p['month']) in targets or
+                   p['budget_total']>0 and not p['legacy_reviewed'])}
+    actions = {pid:'replace' for pid in replace_legacy}
+    for decision in decisions:
+        if decision.plan_id in actions:
+            raise HTTPException(422,'历史预案核对不能重复提交。')
+        actions[decision.plan_id] = decision.action
+    if set(actions)-set(candidates):
+        raise HTTPException(409,'历史预案状态已改变，请重新打开分配窗口核对。')
+    for pid,p in candidates.items():
+        if pid not in actions:
+            raise HTTPException(409,f"{p['system_name']} · {p['month']} 有历史手填额度，请在预算页“分配收入”中核对：替代重复额度，或确认是独立资金。新入账可先暂不分配。")
+        if actions[pid]=='independent' and (p['budget_system_id'],p['month']) in targets:
+            raise HTTPException(422,'同月旧总额必须被收入分配替代，不能另行叠加为独立资金。')
+    replaced = set()
+    for pid,action in actions.items():
+        p = candidates[pid]
+        if action=='replace':
+            record_plan_revision(c,pid)
+            # Version and derived total are updated together with affected income plans.
+            c.execute("UPDATE budget_plans SET funding_mode='income',total_minor=0 WHERE id=?",(pid,))
+            c.execute('DELETE FROM budget_legacy_reviews WHERE plan_id=?',(pid,))
+            replaced.add(pid)
+        else:
+            c.execute('''INSERT INTO budget_legacy_reviews(plan_id,plan_version,decision)
+                VALUES (?,?,'independent') ON CONFLICT(plan_id) DO UPDATE SET
+                plan_version=excluded.plan_version,decision=excluded.decision,reviewed_at=CURRENT_TIMESTAMP''',
+                (pid,p['version']))
+    return replaced
+
+
+def save_allocations(c, kind, entry_id, items, replace_legacy=(), expected_token=None, legacy_decisions=()):
     """Caller owns the write transaction, including a new income when supplied."""
     catalog = FundingCatalog(c)
     before = catalog.describe(kind, entry_id)
     if expected_token is not None and expected_token != allocation_token(c,catalog,before):
         raise HTTPException(409,'收入、分配或预算已更新，请重新打开分配窗口核对；当前草稿未保存。')
     items = resolve_remainder(c,catalog,before,items)
+    replaced = review_legacy(c,items,before['date'],replace_legacy,legacy_decisions)
     previous = [r for r in catalog.bindings if reference(r)==(kind,entry_id)]
-    affected = {r['plan_id'] for r in previous}
+    affected = {r['plan_id'] for r in previous} | replaced
     for pid in affected:
         record_plan_revision(c,pid)
     column = 'transaction_id' if kind=='transaction' else 'group_id'
@@ -210,7 +268,7 @@ def get_allocations(kind: Literal['transaction','offset_group'], entry_id: int):
 @router.put('/api/budget/income-allocations/{kind}/{entry_id}')
 def update_allocations(kind: Literal['transaction','offset_group'], entry_id: int, body: AllocationWrite):
     with mutation(extra_snapshot=allocation_snapshot) as c:
-        return save_allocations(c,kind,entry_id,body.items,body.replace_legacy_plan_ids,body.expected_token)
+        return save_allocations(c,kind,entry_id,body.items,body.replace_legacy_plan_ids,body.expected_token,body.legacy_decisions)
 
 
 @router.post('/api/budget/income-allocations/{kind}/{entry_id}/preview')
@@ -241,24 +299,51 @@ def preview_allocations(kind: Literal['transaction','offset_group'], entry_id: i
                     overallocated=remaining is not None and remaining<0,items=resolved)
 
 
+ALLOCATION_NOTE = ('日期筛选按收入发生日／事项统计日；以下分配包含匹配来源的所有生效月份，'
+                   '不等于该月新增预算。第六页按预算生效月计算。历史标签仅供原始流水筛选，不代表已分配收入。')
+
+
+def allocation_records(c):
+    rows = [dict(r) for r in c.execute('''SELECT a.*,p.budget_system_id,p.month,p.currency_code AS budget_currency,
+                       b.name AS budget_name FROM budget_income_allocations a
+                       JOIN budget_plans p ON p.id=a.plan_id JOIN budget_systems b ON b.id=p.budget_system_id
+                       ORDER BY p.month,a.id''')]
+    catalog = FundingCatalog(c)
+    sources = {}
+    for row in rows:
+        key = reference(row)
+        if key not in sources:
+            sources[key] = catalog.describe(*key)
+        source = sources[key]
+        row.update(amount=money(row['amount_minor'],catalog.places[row['budget_currency']]),
+                   source_date=source['date'],source_title=source['title'],source_url=source['url'],
+                   source_complete=source['complete'] and not source['overallocated'],
+                   source_status=source['reason'] or ('收入来源超额分配，请调整' if source['overallocated'] else '来源额度已核验'))
+    return rows
+
+
+def allocation_metadata(rows):
+    rows = list({r['id']:r for r in rows}.values())
+    warnings = {reference(r):dict(entry_type=reference(r)[0],entry_id=reference(r)[1],
+                title=r['source_title'],url=r['source_url'],reason=r['source_status'])
+                for r in rows if not r['source_complete']}
+    return dict(allocation_details=rows,allocation_warnings=list(warnings.values()),
+                allocation_complete=not warnings,allocation_note=ALLOCATION_NOTE)
+
+
 def allocations_for_transactions(c, transaction_ids, budget_system_id=None):
     """Metadata only: a source group is returned once in the separate summary."""
     ids = set(transaction_ids)
-    rows = c.execute('''SELECT a.*,p.budget_system_id,p.month,p.currency_code AS budget_currency,
-                       b.name AS budget_name FROM budget_income_allocations a
-                       JOIN budget_plans p ON p.id=a.plan_id JOIN budget_systems b ON b.id=p.budget_system_id''')
     memberships = {r['transaction_id']:r['group_id'] for r in c.execute('SELECT * FROM transaction_offset_members')}
     groups = {memberships[i] for i in ids if i in memberships}
-    selected = [dict(r) for r in rows if (r['transaction_id'] in ids or r['group_id'] in groups)
+    selected = [r for r in allocation_records(c) if (r['transaction_id'] in ids or r['group_id'] in groups)
                 and (budget_system_id is None or r['budget_system_id']==budget_system_id)]
-    for r in selected:
-        r['amount'] = money(r['amount_minor'],currency(c,r['budget_currency']))
     per_transaction = {i:[r for r in selected if r['transaction_id']==i or
                           r['group_id'] is not None and r['group_id']==memberships.get(i)] for i in ids}
     totals = {}
     for row in selected:
         code = row['budget_currency']
-        totals[code] = totals.get(code,0)+row['amount_minor']
+        totals[code] = totals.get(code,0)+(row['amount_minor'] if row['source_complete'] else 0)
     return per_transaction, [dict(currency_code=code,amount=money(value,currency(c,code))) for code,value in sorted(totals.items())]
 
 
@@ -266,17 +351,23 @@ def project_income_budget(c, entries, system_id):
     """Budget-filtered personal reports use allocated portions, retaining original members."""
     from app.personal_cashflow import value_entry
     rates = [dict(r) for r in c.execute('SELECT * FROM daily_cny_exchange_rates ORDER BY rate_date')]
-    allocations = [dict(r) for r in c.execute('''SELECT a.*,p.budget_system_id,
-        p.currency_code AS budget_currency,b.name AS budget_name FROM budget_income_allocations a
-        JOIN budget_plans p ON p.id=a.plan_id JOIN budget_systems b ON b.id=p.budget_system_id''')]
+    allocations = allocation_records(c)
     result = []
     for entry in entries:
         matched = [r for r in allocations if reference(r)==(entry['entry_type'],entry['entry_id'])]
-        if entry['kind']!='income' or not matched:
+        if entry['kind']!='income':
             result.append(entry)
             continue
+        if not matched:
+            # Legacy tags remain searchable in raw records, but never create budget funding.
+            if system_id is None:
+                result.append(entry)
+            elif system_id==0:
+                result.append(dict(entry,budget_system_id=None,budget_system_name=None,budget_mixed=False))
+            continue
         if system_id is None:
-            result.append(dict(entry,budget_system_name='、'.join(dict.fromkeys(r['budget_name'] for r in matched))))
+            result.append(dict(entry,budget_system_name='、'.join(dict.fromkeys(r['budget_name'] for r in matched)),
+                               income_allocations=matched))
             continue
         selected = [r for r in matched if r['budget_system_id']==system_id]
         if not selected:
@@ -285,8 +376,12 @@ def project_income_budget(c, entries, system_id):
                           currency_code=r['budget_currency'],transaction_date=entry['statistics_date'],
                           transaction_type='income') for r in selected]
         projected = dict(entry,budget_system_id=system_id,budget_system_name=selected[0]['budget_name'],
-                         budget_mixed=False,allocation_basis=True)
+                         budget_mixed=False,allocation_basis=True,income_allocations=selected)
         projected['_valuations'] = {code:value_entry(dict(kind='income',members=synthetic),rates,code)
                                     for code in ('CNY','HKD')}
+        invalid = next((r for r in selected if not r['source_complete']),None)
+        if invalid:
+            for valuation in projected['_valuations'].values():
+                valuation.update(amount=None,funding_issue=invalid['source_status'])
         result.append(projected)
     return result

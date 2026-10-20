@@ -77,7 +77,7 @@ window.BudgetStorage = (() => {
     const note=input('text',editing?.note,'storage-transfer-note');note.maxLength=500;
     const grid=node('div','','form-grid storage-transfer-grid');grid.append(field('生效月份',date),field('转出存储',from),field('转入存储',to),field(`调拨金额（${data.row.currency_code||'未设币种'}）`,amount),field('说明（可选）',note));
     const submit=node('button',editing?'保存调拨修改':'新增调拨');submit.type='submit';submit.id='save-storage-transfer';
-    form.append(node('p','调拨只移动同一预算中的存储额度，总剩余保持不变。转出存储必须有足够余额；存储不足的负数可由其他存储调入补足。投资卖出或账户转账仍需按实际情况记账。','subtle-note'),grid,submit);
+    form.append(node('p','调拨在所选月消费扣减后生效，按月末余额调整存储；不会重新扣以前的消费，下月承接调整后的余额。调拨只移动同一预算额度，总剩余不变，转出存储须有足够余额。投资卖出或账户转账仍需按实际情况记账。','subtle-note'),grid,submit);
     if(editing)form.append(button('取消修改',()=>switchMode('transfers')));
     form.onsubmit=e=>{e.preventDefault();const id=editing?.id;act(()=>save(`transfers${id?'/'+id:''}`,{month:date.value,source_id:Number(from.value)||null,destination_id:Number(to.value)||null,amount:amount.value,note:note.value,transfer_version:editing?.version||0},id?'PUT':'POST'));};content.append(form);
     const table=node('table'),head=node('tr');for(const label of ['月份','转出 → 转入','金额','说明','操作'])head.append(node('th',label));table.append(head);

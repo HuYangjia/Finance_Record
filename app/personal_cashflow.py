@@ -203,8 +203,10 @@ def summarize(entries):
                        'balance': format_decimal(amounts['income'] - amounts['expense'], 2),
                        'complete': excluded == 0, 'excluded_count': excluded,
                        'included_count': len(entries) - excluded, 'missing_currencies': sorted(missing)})
+    from app.income_allocations import allocation_metadata
     return {'available': True, 'entry_count': len(entries),
-            'transaction_count': sum(e['transaction_count'] for e in entries), 'valuations': totals}
+            'transaction_count': sum(e['transaction_count'] for e in entries), 'valuations': totals,
+            **allocation_metadata([r for e in entries for r in e.get('income_allocations',[])])}
 
 
 def analyze(entries, start_date, end_date, kind):
