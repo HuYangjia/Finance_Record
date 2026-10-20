@@ -1,0 +1,104 @@
+// Desktop-only regression. Run exclusively against the isolated browser fixture.
+const {chromium,request}=require('playwright');
+const assert=require('node:assert/strict');
+const base='http://127.0.0.1:18110';
+(async()=>{
+  const api=await request.newContext({baseURL:base});
+  const json=async response=>{assert(response.ok(),await response.text());return response.json();};
+  const get=async path=>json(await api.get(path));
+  assert.deepEqual(await get('/__budget_test_fixture'),{fixture:'budget-browser',temporary:true});
+  let config=await get('/api/budget/config');
+  const daily=config.daily_expense;
+  config=await json(await api.post('/api/budget/config/systems',{data:{expected_version:config.version,name:'拆分留存',currency_code:'HKD'}}));
+  const other=config.systems.find(s=>s.name==='拆分留存').id;
+  const account=(await get('/api/accounts')).find(a=>a.currency_code==='HKD').id;
+  const salary=(await get('/api/categories?kind=income'))[0].id;
+  const browser=await chromium.launch({headless:true});
+  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];
+  page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
+  const text=(selector,value)=>page.waitForFunction(([s,v])=>document.querySelector(s)?.textContent.includes(v),[selector,value]);
+  const pick=(id,value)=>page.locator('#'+id).evaluate((el,v)=>{
+    el.value=String(v);el.dispatchEvent(new Event('change',{bubbles:true}));window.refreshFrequentPickers?.();
+  },value);
+  try{
+    await page.goto(base+'/');await page.waitForFunction(()=>!document.querySelector('#income-budget-system').disabled);
+    await page.locator('.entry-mode[data-mode=income]').click();
+    await pick('income-destination-account',account);await pick('income-category',salary);
+    await page.fill('#income-date','2026-10-05');await page.fill('#income-amount','1000');await page.fill('#income-note','桌面拆分收入');
+    await page.getByLabel('按金额拆分到多个预算').check();
+    const parts=page.locator('.income-entry-allocation .income-allocation-row');
+    await parts.nth(0).locator('select').selectOption(String(daily));await parts.nth(0).locator('[type=number]').fill('600');
+    await page.locator('.income-entry-allocation').getByRole('button',{name:'＋添加预算'}).click();
+    await parts.nth(1).locator('select').selectOption(String(other));await parts.nth(1).locator('[type=number]').fill('400');
+    await page.screenshot({path:'/tmp/finance-income-entry.png',fullPage:true});
+    await page.click('#submit-income');await text('#form-status','已记录 1000.00');
+    assert.equal(await page.getByLabel('按金额拆分到多个预算').isChecked(),false);
+    let data=await get('/api/budget/overview?end_month=2026-10');
+    assert.equal(data.plans.find(p=>p.budget_system_id===daily).budget_total,'600.00');
+    const source=(await get('/api/budget/income-sources?keyword=桌面拆分收入')).sources[0];
+    assert(source);
+
+    await page.goto(base+'/budgets');await text('#budget-status','已加载');
+    await page.fill('#plan-month','2026-10');await text('#month-plans-title','2026-10');
+    await page.click('#new-budget');await page.waitForSelector('#income-source-dialog[open]');
+    await page.locator(`#income-source-dialog [data-source-key="transaction:${source.entry_id}"]`).getByRole('button').click();
+    await page.waitForSelector('#income-allocation-editor[open]');
+    const rows=page.locator('#income-allocation-editor .income-allocation-row');
+    assert.equal(await rows.count(),2);
+    await rows.nth(0).locator('[type=number]').fill('700');
+    await text('#income-allocation-editor .funding-preview','已超额');
+    await page.getByRole('button',{name:'保存分配',exact:true}).click();
+    await text('#income-allocation-editor [role=alert]','超出');
+    assert.equal(await rows.nth(0).locator('[type=number]').inputValue(),'700');
+    await rows.nth(1).locator('[type=number]').fill('300');
+    await text('#income-allocation-editor .funding-preview','尚可分配 0.00');
+    await page.screenshot({path:'/tmp/finance-income-editor.png',fullPage:true});
+    await page.getByRole('button',{name:'保存分配',exact:true}).click();
+    await page.waitForSelector('#income-allocation-editor[open]',{state:'hidden'});
+    await page.locator('#income-source-dialog').getByRole('button',{name:'关闭分配收入',exact:true}).click();
+    await text('#month-plans','700.00');
+    await page.locator(`#month-plans tr[data-system-id="${daily}"]`).getByRole('button').click();
+    await page.waitForSelector('#plan-editor[open]');
+    assert.equal(await page.locator('.currency-total').getAttribute('readonly'),'');
+    await page.click('#plan-history');await text('#budget-detail-content','收入分配：');
+    await page.locator('[data-budget-close]').click();
+    await page.click('.add-allocation');
+    const storage=config.storage.find(s=>s.name==='活期').id;
+    await page.locator('[data-field=storage_method_id]').selectOption(String(storage));
+    await page.locator('[data-field=amount]').fill('500');
+    await page.click('#save-plan');await page.waitForSelector('#plan-editor[open]',{state:'hidden'});
+    data=await get('/api/budget/overview?end_month=2026-10');
+    assert.equal(data.plans.find(p=>p.budget_system_id===daily).allocated,'500.00');
+    await page.screenshot({path:'/tmp/finance-income-budget.png',fullPage:true});
+
+    await page.goto(base+'/accounts');await page.waitForLoadState('networkidle');
+    await page.locator('.detail-view-mode[data-view=search]').click();
+    await page.selectOption('#search-budget-system',String(other));
+    // Use the raw API as well to verify that filtering never changes the underlying income.
+    const query=await get(`/api/transactions/search?budget_system_id=${other}&transaction_types=income`);
+    assert.equal(query.transactions[0].inflow_amount,'1000.00');
+    assert.equal(query.summary.budget_income_allocations[0].amount,'300.00');
+    await page.evaluate(id=>openTransactionEditor(id),source.entry_id);
+    await page.waitForSelector('#transaction-editor-dialog[open]');
+    await page.getByRole('button',{name:'查看 / 修改收入预算分配',exact:true}).click();
+    await page.waitForSelector('#income-allocation-editor[open]');
+    assert.equal(await page.locator('#income-allocation-editor .income-allocation-row').count(),2);
+    await page.locator('#income-allocation-editor').getByRole('button',{name:'取消',exact:true}).click();
+    await page.goto(base+'/budgets');await text('#budget-status','已加载');
+    const oldPlan=await json(await api.put(`/api/budget/plans/${daily}/2026-09/HKD`,{data:{expected_version:0,total:'500',items:[]}}));
+    const historical=await json(await api.post('/api/incomes',{data:{transaction_date:'2026-09-05',
+      destination_account_id:account,category_id:salary,amount:'500',note:'历史转来源'}}));
+    await page.evaluate(id=>IncomeAllocations.open('transaction',id),historical.id);
+    await page.waitForSelector('#income-allocation-editor[open]');
+    await page.locator('#income-allocation-editor .allocation-budget').selectOption(String(daily));
+    await page.locator('#income-allocation-editor .allocation-amount').fill('500');
+    const replace=page.locator('#income-allocation-editor .allocation-legacy input[type=checkbox]');
+    await replace.waitFor();assert.equal(await replace.isChecked(),false);
+    await replace.check();await page.getByRole('button',{name:'保存分配',exact:true}).click();
+    await page.waitForSelector('#income-allocation-editor[open]',{state:'hidden'});
+    const migrated=(await get('/api/budget/overview?end_month=2026-09')).plans.find(p=>p.id===oldPlan.id);
+    assert.equal(migrated.budget_total,'500.00');assert.equal(migrated.funding_mode,'income');
+    assert.deepEqual(errors,[]);
+    console.log('PASS desktop income split, atomic save, over-allocation draft, readonly totals, storage, query editor and explicit historical replacement');
+  }finally{await browser.close();await api.dispose();}
+})().catch(e=>{console.error(e);process.exitCode=1;});

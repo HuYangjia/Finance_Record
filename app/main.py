@@ -22,6 +22,7 @@ from app.database import ROOT_DIR, connect, create_backup, initialize_database
 from app.budgets import router as budgets_router, require_system, budget_filter_sql
 from app.budget_storage import router as budget_storage_router
 from app.entry_shortcuts import router as entry_shortcuts_router
+from app.income_allocations import router as income_allocations_router, AllocationItem, save_allocations
 from app.offsets import (
     router as offsets_router,
     annotate_transactions,
@@ -124,6 +125,7 @@ app.include_router(offsets_router)
 app.include_router(budgets_router)
 app.include_router(budget_storage_router)
 app.include_router(entry_shortcuts_router)
+app.include_router(income_allocations_router)
 
 
 @app.get("/offsets", include_in_schema=False)
@@ -143,6 +145,7 @@ class ExpenseCreate(BaseModel):
 
 class IncomeCreate(BaseModel):
     budget_system_id: int | None = Field(default=None, gt=0)
+    budget_allocations: list[AllocationItem] | None = Field(default=None, max_length=300)
     transaction_date: date = Field(default_factory=date.today)
     destination_account_id: int
     amount: Decimal = Field(gt=0)
@@ -2886,10 +2889,12 @@ def create_expense(expense: ExpenseCreate):
 
 @app.post("/api/incomes", status_code=201)
 def create_income(income: IncomeCreate):
-    create_backup()
+    backup_path = create_backup()
+    budget_tag = income.budget_system_id if income.budget_allocations is None else None
 
     with connect() as connection:
-        require_system(connection, income.budget_system_id)
+        connection.execute('BEGIN IMMEDIATE')
+        require_system(connection, budget_tag)
         account = get_active_account(connection, income.destination_account_id, "到账账户")
         category = get_active_category(connection, income.category_id, "income")
         amount_minor = amount_to_minor(income.amount, account["decimal_places"])
@@ -2913,9 +2918,17 @@ def create_income(income: IncomeCreate):
                 income.category_id,
                 clean_optional_text(income.counterparty),
                 clean_optional_text(income.note),
-                income.budget_system_id,
+                budget_tag,
             ),
         )
+        if income.budget_allocations is not None:
+            result = save_allocations(connection,'transaction',cursor.lastrowid,income.budget_allocations)
+            if result['plan_ids']:
+                write_audit_log(connection,entity_type='budget',entity_id=None,action='update',
+                    backup_file=backup_path.name,reason='收入入账并分配预算',before=None,
+                    after=dict(transaction_id=cursor.lastrowid,plan_ids=result['plan_ids'],
+                               allocations=[dict(r) for r in connection.execute(
+                                   'SELECT * FROM budget_income_allocations WHERE transaction_id=?',(cursor.lastrowid,))]))
         updated_account = get_account_balance_row(connection, income.destination_account_id)
 
     return {
@@ -2928,7 +2941,7 @@ def create_income(income: IncomeCreate):
             updated_account["balance_minor"], account["decimal_places"]
         ),
         "category_name": category["name"],
-        "budget_system_id": income.budget_system_id,
+        "budget_system_id": budget_tag,
     }
 
 
@@ -3294,6 +3307,10 @@ def search_transactions(
                 "SELECT code, decimal_places FROM currencies"
             ).fetchall()
         }
+        from app.income_allocations import allocations_for_transactions
+        allocation_rows, allocation_totals = allocations_for_transactions(
+            connection, [r['id'] for r in summary_rows if r['transaction_type']=='income'],
+            budget_system_id)
 
     transactions = [
         {
@@ -3344,6 +3361,10 @@ def search_transactions(
         transaction_types,
         currency_decimal_places,
     )
+    summary['budget_income_allocations'] = allocation_totals
+    summary['allocation_note'] = '预算分配按匹配的完整收入来源计算，每个来源只计一次；下方原始收付仍展示实际到账总额。'
+    for transaction in transactions:
+        transaction['income_allocations'] = allocation_rows.get(transaction['id'],[])
     return {
         "filters": {
             "account_id": account_id,

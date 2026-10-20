@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS budget_plans (
     id INTEGER PRIMARY KEY, budget_system_id INTEGER NOT NULL REFERENCES budget_systems(id) ON DELETE RESTRICT,
     month TEXT NOT NULL, currency_code TEXT NOT NULL REFERENCES currencies(code),
     total_minor INTEGER CHECK(total_minor >= 0), version INTEGER NOT NULL DEFAULT 1,
+    funding_mode TEXT NOT NULL DEFAULT 'legacy' CHECK(funding_mode IN ('legacy','income')),
     note TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(budget_system_id,month,currency_code)
 );
@@ -56,6 +57,19 @@ CREATE TABLE IF NOT EXISTS budget_plan_funding (
 );
 CREATE INDEX IF NOT EXISTS budget_funding_transaction ON budget_plan_funding(transaction_id);
 CREATE INDEX IF NOT EXISTS budget_funding_group ON budget_plan_funding(group_id);
+CREATE TABLE IF NOT EXISTS budget_income_allocations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER NOT NULL REFERENCES budget_plans(id) ON DELETE RESTRICT,
+    transaction_id INTEGER REFERENCES transactions(id) ON DELETE RESTRICT,
+    group_id INTEGER REFERENCES transaction_offset_groups(id) ON DELETE RESTRICT,
+    currency_code TEXT NOT NULL REFERENCES currencies(code),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor > 0),
+    CHECK ((transaction_id IS NOT NULL AND group_id IS NULL) OR
+           (transaction_id IS NULL AND group_id IS NOT NULL)),
+    UNIQUE(plan_id,transaction_id), UNIQUE(plan_id,group_id)
+);
+CREATE INDEX IF NOT EXISTS budget_allocation_transaction ON budget_income_allocations(transaction_id);
+CREATE INDEX IF NOT EXISTS budget_allocation_group ON budget_income_allocations(group_id);
 CREATE TABLE IF NOT EXISTS budget_storage_defaults (
     budget_system_id INTEGER PRIMARY KEY REFERENCES budget_systems(id) ON DELETE RESTRICT,
     storage_method_id INTEGER NOT NULL REFERENCES budget_storage_methods(id) ON DELETE RESTRICT

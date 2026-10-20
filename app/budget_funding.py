@@ -14,10 +14,13 @@ def guard_reference(c, kind, entry_id):
     column = 'transaction_id' if kind == 'transaction' else 'group_id'
     rows = c.execute(f'''SELECT p.month,b.name FROM budget_plan_funding f
         JOIN budget_plans p ON p.id=f.plan_id JOIN budget_systems b ON b.id=p.budget_system_id
-        WHERE f.{column}=? ORDER BY p.month,b.id''', (entry_id,)).fetchall()
+        WHERE f.{column}=?
+        UNION SELECT p.month,b.name FROM budget_income_allocations f
+        JOIN budget_plans p ON p.id=f.plan_id JOIN budget_systems b ON b.id=p.budget_system_id
+        WHERE f.{column}=? ORDER BY month,name''', (entry_id,entry_id)).fetchall()
     if rows:
         names = '、'.join(f"{r['month']} {r['name']}" for r in rows[:5])
-        raise HTTPException(409, f'该收入来源已绑定预算（{names}），请先在预案中解除来源绑定，再调整事项关系或删除。')
+        raise HTTPException(409, f'该收入来源已分配预算（{names}），请先在预算页“分配收入”核对并移除分配，再调整事项关系或删除；随后可重新分配完整事项。')
 
 
 class FundingCatalog:
@@ -32,6 +35,11 @@ class FundingCatalog:
             p.month,p.version,p.budget_system_id,b.name AS system_name FROM budget_plan_funding f
             JOIN budget_plans p ON p.id=f.plan_id JOIN budget_systems b ON b.id=p.budget_system_id
             ORDER BY p.month,p.id''')]
+        self.bindings.extend(dict(r) for r in c.execute('''SELECT a.plan_id,a.transaction_id,a.group_id,
+            a.currency_code,a.amount_minor AS total_minor,p.currency_code AS plan_currency,
+            p.month,p.version,p.budget_system_id,b.name AS system_name,a.id AS allocation_id
+            FROM budget_income_allocations a JOIN budget_plans p ON p.id=a.plan_id
+            JOIN budget_systems b ON b.id=p.budget_system_id ORDER BY p.month,p.id,a.id'''))
 
     def amount(self, value, code, day, target):
         from app.budget_execution import member_amount
@@ -121,6 +129,19 @@ class FundingCatalog:
         source = self.describe(*reference(row),exclude_plan_id=plan_id)
         source['status'] = source['reason'] or ('收入来源超额占用，请调整预案' if source['overallocated'] else '来源额度已核验')
         return source
+
+    def plan_sources(self, plan_id):
+        keys = list(dict.fromkeys(reference(r) for r in self.bindings if r['plan_id']==plan_id))
+        result = []
+        for key in keys:
+            source = self.describe(*key)
+            source['status'] = source['reason'] or ('收入来源超额分配，请调整' if source['overallocated'] else '来源额度已核验')
+            matching = [r for r in self.bindings if r['plan_id']==plan_id and reference(r)==key]
+            source['allocated_to_plan'] = None if any(r['total_minor'] is None for r in matching) else str(sum(
+                (Decimal(r['total_minor']) / 10**self.places[r['plan_currency']]
+                 for r in matching), Decimal(0)))
+            result.append(source)
+        return result
 
 
 def save_binding(c, plan_id, code, total, body, before):

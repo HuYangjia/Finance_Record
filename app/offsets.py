@@ -163,6 +163,8 @@ def query_entries(start_date=None, end_date=None, transaction_types=None, catego
         if involved_account_id and not connection.execute('SELECT 1 FROM accounts WHERE id=?', (involved_account_id,)).fetchone():
             raise HTTPException(404, '账户不存在。')
         entries = build_entries(*read_ledger(connection))
+        from app.income_allocations import project_income_budget
+        entries = project_income_budget(connection,entries,budget_system_id)
     if groups_only:
         entries = [e for e in entries if e['entry_type'] == 'offset_group']
     entries = filter_entries(entries, **filters)
@@ -242,6 +244,8 @@ def annotate_transactions(records):
     with connect() as connection:
         connection.execute('BEGIN')
         daily = daily_expense_system(connection)
+        from app.income_allocations import allocations_for_transactions
+        allocations, _ = allocations_for_transactions(connection,ids)
         for start in range(0,len(ids),500):
             batch=ids[start:start+500];placeholders=','.join('?' for _ in batch)
             budgets.update({r['id']:dict(r) for r in connection.execute(f'''SELECT t.id,t.budget_system_id,b.name AS budget_system_name
@@ -252,6 +256,7 @@ def annotate_transactions(records):
                 JOIN transaction_offset_groups g ON g.id=m.group_id WHERE m.transaction_id IN ({placeholders})
             ''',batch)})
     for record in records:
+        record['income_allocations'] = allocations.get(record['id'],[])
         record.update({k: budgets.get(record['id'],{}).get(k) for k in ('budget_system_id','budget_system_name')})
         effective_budget(record,daily)
         link = links.get(record['id'], {})

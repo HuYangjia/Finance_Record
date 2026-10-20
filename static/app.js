@@ -50,9 +50,9 @@ let noteInput = document.querySelector("#note");
 
 for (const mode of ['expense','income']) {
   const grid=forms[mode].querySelector('.form-grid');
-  const label=document.createElement('label');label.className='entry-budget-field';const span=document.createElement('span');span.textContent=mode==='expense'?'消费自预算':'收入归属';
+  const label=document.createElement('label');label.className='entry-budget-field';const span=document.createElement('span');span.textContent=mode==='expense'?'消费自预算':'收入全额分给';
   const select=document.createElement('select');select.id=`${mode}-budget-system`;
-  const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=mode==='expense'?'日常预算（自动）':'未归属';select.append(placeholder);select.disabled=true;
+  const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=mode==='expense'?'日常预算（自动）':'暂不分配预算';select.append(placeholder);select.disabled=true;
   const hint=document.createElement('small');hint.id=`${mode}-budget-hint`;hint.textContent='正在加载预算设置…';
   label.append(span,select,hint);
   const presetLabel=document.createElement('label'),presetTitle=document.createElement('span'),preset=document.createElement('select');
@@ -70,6 +70,9 @@ for (const mode of ['expense','income']) {
     resolveBudget(mode);window.refreshFrequentPickers(forms[mode]);
   };
 }
+
+const incomeAllocationEntry=IncomeAllocations.entry(forms.income.querySelector('.form-grid'),()=>state.budgetConfig,
+  document.getElementById('income-budget-system'),()=>accountById(incomeAccountSelect.value)?.currency_code||'CNY');
 
 function resolveBudget(mode) {
   const config=state.budgetConfig;if(!config)return;
@@ -395,6 +398,7 @@ function resetTransactionForm({ preserveExpenseAccount = false } = {}) {
     ? expenseAccountSelect.value
     : "";
   form.reset();
+  if(state.mode==='income')incomeAllocationEntry.reset();
   dateInput.value = localDate();
   if(state.mode!=='transfer'){state.manualBudget[state.mode]=false;document.getElementById(`${state.mode}-preset`).value='';}
   if (state.mode === "expense") {
@@ -455,11 +459,14 @@ function buildPayload() {
   }
 
   if (state.mode === "income") {
+    const allocations=incomeAllocationEntry.payload();
     return {
       endpoint: "/api/incomes",
       payload: {
         ...common,
         destination_account_id: Number(incomeAccountSelect.value),
+        budget_allocations: allocations,
+        budget_system_id: null,
         amount: incomeAmountInput.value,
         category_id: Number(incomeCategorySelect.value),
         counterparty: counterpartyInput.value.trim() || null,

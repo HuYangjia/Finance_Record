@@ -57,10 +57,18 @@ def budget_filter_sql(filters, parameters, budget_system_id):
         if budget_system_id < 0:
             raise HTTPException(422, '预算筛选不正确。')
         if budget_system_id == 0:
-            filters.append(f'{effective} IS NULL')
+            filters.append(f'''{effective} IS NULL AND NOT EXISTS (
+                SELECT 1 FROM budget_income_allocations a WHERE a.transaction_id=transactions.id
+                OR a.group_id=(SELECT group_id FROM transaction_offset_members WHERE transaction_id=transactions.id))''')
         else:
-            filters.append(f'{effective} = ?')
-            parameters.append(budget_system_id)
+            filters.append(f'''(({effective} = ? AND NOT (transactions.transaction_type='income' AND EXISTS (
+                SELECT 1 FROM budget_income_allocations a WHERE a.transaction_id=transactions.id
+                OR a.group_id=(SELECT group_id FROM transaction_offset_members WHERE transaction_id=transactions.id))))
+                OR (transactions.transaction_type='income' AND EXISTS (
+                SELECT 1 FROM budget_income_allocations a JOIN budget_plans p ON p.id=a.plan_id
+                WHERE p.budget_system_id=? AND (a.transaction_id=transactions.id
+                OR a.group_id=(SELECT group_id FROM transaction_offset_members WHERE transaction_id=transactions.id)))))''')
+            parameters.extend([budget_system_id,budget_system_id])
 
 
 def paths(rows):
@@ -419,6 +427,7 @@ def plan_data(c, system_id, month, code):
                 dimensions={key:[r for r in config[key] if key=='storage' or r['budget_system_id']==system_id] for key in ('storage','purposes')})
     from app.budget_funding import FundingCatalog
     data['funding'] = FundingCatalog(c).for_plan(data['id']) if data['id'] and c.execute('SELECT 1 FROM budget_plan_funding WHERE plan_id=?',(data['id'],)).fetchone() else None
+    data['funding_sources'] = FundingCatalog(c).plan_sources(data['id']) if data['id'] else []
     return data
 
 
@@ -454,6 +463,9 @@ def get_plan(system_id: int, month: str, code: str):
 
 def save_plan_in_connection(c, system_id: int, month: str, code: str, body: PlanWrite):
     before = plan_data(c,system_id,month,code)
+    if before.get('funding_mode') == 'income':
+        if body.total is None or minor(body.total,before['decimal_places']) != before['total_minor'] or body.funding is not None:
+            raise HTTPException(422,'本月新增由收入分配自动汇总，请通过“分配收入”修改来源金额；此处只维护存储安排。')
     from app.budget_funding import validate_preview, save_binding
     validate_preview(c,body,before)
     system = require_system(c,system_id)
@@ -619,6 +631,10 @@ def change_system_currency(system_id: int, body: SystemCurrencyWrite):
             c.execute('UPDATE budget_plans SET currency_code=?,total_minor=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?',
                       (body.currency_code,total,p['id']))
             c.executemany('UPDATE budget_plan_items SET amount_minor=? WHERE id=?', [(amount,item_id) for item_id,amount in items])
+            for allocation in c.execute('SELECT * FROM budget_income_allocations WHERE plan_id=?',(p['id'],)).fetchall():
+                old_amount = money(allocation['amount_minor'],p['decimal_places'])
+                c.execute('UPDATE budget_income_allocations SET amount_minor=? WHERE id=?',
+                          (minor(old_amount,places),allocation['id']))
         from app.budget_funding import check_currency_change
         check_currency_change(c,before['plans'])
         for p in before['plans']:
@@ -674,7 +690,8 @@ def budget_overview(end_month: str, start_month: str = '0001-01', system_id: int
             p.update(system_name=systems[p['budget_system_id']]['name'],is_active=systems[p['budget_system_id']]['is_active'],
                      budget_total=money(total,places),allocated=money(allocated,places),unallocated=money(total-allocated,places),
                      budget_total_minor=total,allocated_minor=allocated,unallocated_minor=total-allocated,
-                     total_inferred=p['total_minor'] is None,items=by_plan[p['id']],funding=funding.for_plan(p['id']))
+                     total_inferred=p['total_minor'] is None,items=by_plan[p['id']],
+                     funding=funding.for_plan(p['id']),funding_sources=funding.plan_sources(p['id']))
         blocks=[]
         for code in sorted({p['currency_code'] for p in plans}):
             places=currencies[code]['decimal_places']; selected=[p for p in plans if p['currency_code']==code]
@@ -705,8 +722,17 @@ def budget_overview_export(end_month: str, start_month: str = '0001-01', system_
     sheet.append(['月份','用途（预算系统）','币种','总预算','已分配存储','待分配','说明','收入来源','来源状态'])
     for p in data['plans']:
         funding=p['funding']
+        sources=p.get('funding_sources',[])
         sheet.append([p['month'],safe(p['system_name']),p['currency_code'],Decimal(p['budget_total']),Decimal(p['allocated']),Decimal(p['unallocated']),safe(p['note']),
-                      safe(funding['title']) if funding else '',safe(funding['status']) if funding else '未绑定来源'])
+                      safe('；'.join(s['title'] for s in sources)),safe('；'.join(s['status'] for s in sources)) if sources else
+                      ('收入分配为零' if p.get('funding_mode')=='income' else '历史手填 · 未核实来源')])
+    sheet.freeze_panes='A2'; sheet=book.create_sheet('收入预算分配')
+    sheet.append(['月份','预算','预算币种','收入来源','来源类型','来源编号','分配金额','来源净收入','来源币种','状态'])
+    for p in data['plans']:
+        for source in p.get('funding_sources',[]):
+            sheet.append([p['month'],safe(p['system_name']),p['currency_code'],safe(source['title']),
+                          source['entry_type'],source['entry_id'],Decimal(source['allocated_to_plan']) if source['allocated_to_plan'] is not None else None,
+                          Decimal(source['net']) if source['net'] is not None else None,source['currency_code'],safe(source['status'])])
     sheet.freeze_panes='A2'; sheet=book.create_sheet('二级存储分配')
     sheet.append(['月份','用途（预算系统）','币种','存储方式','金额','明细名称','备注','历史用途标签'])
     for i in data['items']:

@@ -66,6 +66,10 @@ def initialize_database() -> None:
     if DATABASE_PATH.exists():
         with sqlite3.connect(DATABASE_PATH) as existing:
             tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if 'budget_plans' in tables and 'budget_income_allocations' not in tables:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-income-allocations-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
             if 'accounts' in tables and 'directory_key' not in {
                     r[1] for r in existing.execute('PRAGMA table_info(accounts)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -206,6 +210,8 @@ def initialize_database() -> None:
             connection.execute("INSERT INTO app_settings(key,value) VALUES ('daily_expense_budget_system_id',?)", (str(daily_id),))
             connection.execute("UPDATE app_settings SET value=CAST(value AS INTEGER)+1 WHERE key='budget_config_version'")
         initialize_entry_shortcuts(connection)
+        from app.budget_migrations import migrate_income_allocations
+        migrate_income_allocations(connection)
 
 
 def migrate_account_directories(connection: sqlite3.Connection) -> None:

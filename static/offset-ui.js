@@ -78,8 +78,12 @@ window.OffsetUI = (() => {
       node('strong', member.account_name, 'offset-transaction-account'),
       node('strong', `${member.amount} ${member.currency_code}`, 'offset-transaction-amount'),
       node('span', [member.category_name, member.counterparty, member.note].filter(Boolean).join(' · '), 'offset-transaction-description'),
-      node('span', member.effective_budget_system_name || member.budget_system_name || '未归属', 'status-badge'),
+      node('span', entry.budget_system_name || member.effective_budget_system_name || member.budget_system_name || '未归属', 'status-badge'),
     );
+    if(entry.allocation_basis){
+      const allocated=node('span','所选预算分配：','offset-amounts');
+      allocated.append(net(entry,'CNY'),net(entry,'HKD'));cell.append(allocated);
+    }
     const action = node('span', '', 'offset-transaction-action');
     if (editTransaction) {
       const button = node('button', '编辑', 'table-action'); button.type = 'button';
@@ -94,7 +98,7 @@ window.OffsetUI = (() => {
     if (entry.entry_type === 'transaction') return transactionCell(entry, editTransaction);
     const cell = node('div', '', 'offset-entry');
     const title = node('div', '', 'offset-entry-title');
-    title.append(node('strong', entry.title), node('span', `${entry.statistics_date} · ${entry.kind === 'expense' ? '净支出' : '净收入'} · ${entry.category_name}`));
+    title.append(node('strong', entry.title), node('span', `${entry.statistics_date} · ${entry.allocation_basis?'所选预算分配':entry.kind === 'expense' ? '净支出' : '净收入'} · ${entry.category_name}`));
     title.append(node('span',entry.budget_system_name||'未归属','status-badge'));
     if (entry.entry_type === 'offset_group' && entry.entry_id) title.append(link(entry.entry_id, '编辑事项'));
     cell.append(title);

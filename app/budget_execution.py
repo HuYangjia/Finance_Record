@@ -59,13 +59,17 @@ def execution_report(c, end_month, start_month=None, system_id=None, currency_co
                 expenses[target].append(entry)
     wanted=[month_name(i) for i in range(month_index(start_month),month_index(end_month)+1)]
     rows=[]
-    from app.budget_funding import FundingCatalog
+    from app.budget_funding import FundingCatalog, reference
     funding=FundingCatalog(c)
     funding_issues=defaultdict(list)
     for binding in funding.bindings:
-        source=funding.for_plan(binding['plan_id'])
+        source=funding.describe(*reference(binding))
         if source['reason'] or source['overallocated']:
-            funding_issues[binding['budget_system_id']].append(dict(month=binding['month'],title=source['title'],status=source['status']))
+            warning=dict(month=binding['month'],title=source['title'],
+                         status=source['reason'] or '收入来源超额分配，请调整',
+                         income_mode='allocation_id' in binding)
+            if warning not in funding_issues[binding['budget_system_id']]:
+                funding_issues[binding['budget_system_id']].append(warning)
     for system in config['systems']:
         sid=system['id']; code=system['currency_code']; places=currencies.get(code,2)
         if system_id is not None and sid!=system_id or currency_code and code!=currency_code:
@@ -119,14 +123,21 @@ def execution_report(c, end_month, start_month=None, system_id=None, currency_co
             available=opening+added if opening is not None and added is not None else None
             spent=int((spending[month]*10**places).quantize(Decimal(1),rounding=ROUND_HALF_UP))
             past_issues.extend(issues[month])
-            complete=complete and not issues[month]
+            source_issues=[dict(month=month,title=w['title'],reason=w['status'],
+                               entry_type='income_allocation',entry_id=None)
+                           for w in funding_issues[sid] if w['income_mode'] and w['month']==month]
+            past_issues.extend(source_issues)
+            complete=complete and not issues[month] and not source_issues
             balance+=deposits[month]-spent
             if month in wanted:
-                amounts=dict(opening=opening,added=added,available=available,
+                amounts=dict(opening=opening,added=added,available=None if source_issues else available,
                              expense=spent if not issues[month] and not reason else None,closing=balance if complete else None)
                 rows.append(dict(budget_system_id=sid,system_name=system['name'],currency_code=code,month=month,
                                  origin_month=origin,origin_automatic=not system['execution_start_month'],started=True,
                                  compiled=month in compiled,complete=complete,reason=reason,
+                                 legacy_plan_months=[p['month'] for p in plans[sid] if origin<=p['month']<=month
+                                     and p['funding_mode']=='legacy' and p['budget_total']>0
+                                     and not any(b['plan_id']==p['id'] for b in funding.bindings)],
                                  warnings=list(past_issues),funding_warnings=[w for w in funding_issues[sid] if origin<=w['month']<=month],entry_count=counts[month],nearest_count=nearest[month],
                                  prior_nearest_count=prior_nearest,known_expense=money(spent,places),
                                  **{key:money(value,places) if value is not None else None for key,value in amounts.items()}))

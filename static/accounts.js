@@ -401,8 +401,12 @@ function buildSearchPath() {
 function createStatusBadges(record) {
   const target = document.createElement("div");
   target.className = "status-badges";
-  if(['expense','income'].includes(record.transaction_type)){
+  if(['expense','income'].includes(record.transaction_type)&&!(record.transaction_type==='income'&&record.income_allocations?.length)){
     const badge=document.createElement('span');badge.className='status-badge budget-badge';badge.textContent=(record.effective_budget_system_name||record.budget_system_name||'未归属预算')+(record.budget_inherited?' · 自动':'');target.append(badge);
+  }
+  if(record.transaction_type==='income'){
+    for(const allocation of record.income_allocations||[])target.append(
+      BudgetUI.node('span',`${allocation.budget_name}：${allocation.amount} ${allocation.budget_currency}${allocation.group_id?'（完整事项分配）':''}`,'status-badge budget-badge'));
   }
   if (record.is_manual_adjustment) {
     const badge = document.createElement("span");
@@ -721,6 +725,12 @@ function createSearchSummarySection(title, records, currencyLabel, includeCovera
 function renderTransactionSearchSummary(summary) {
   transactionSearchSummaryContent.replaceChildren();
   transactionSearchSummaryMeta.textContent = "";
+  if(summary.budget_income_allocations?.length){
+    const section=BudgetUI.node('section','','budget-allocation-summary');
+    section.append(BudgetUI.node('h3',searchBudgetSelect.value?'分配给所选预算的收入':'已分配到预算的收入'));
+    for(const row of summary.budget_income_allocations)section.append(BudgetUI.node('strong',`${row.amount} ${row.currency_code} `));
+    section.append(BudgetUI.node('p',summary.allocation_note,'subtle-note'));transactionSearchSummaryContent.append(section);
+  }
 
   if (!summary.available) {
     const notice = document.createElement("div");
@@ -747,7 +757,7 @@ function renderTransactionSearchSummary(summary) {
   const combined = document.createElement("section");
   combined.className = "search-summary-block";
   const heading = document.createElement("h3");
-  heading.textContent = "全部类型合计";
+  heading.textContent = "原始收付合计";
   combined.append(
     heading,
     createSearchSummarySection("原币种明细", summary.raw_totals_by_currency, "币种"),
@@ -1082,6 +1092,11 @@ function createDistributionTable(title, records, amountLabel, includeAmountShare
 function renderTransactionAnalysis(data) {
   analysisContent.replaceChildren();
   analysisConstraint.hidden = true;
+  if(searchBudgetSelect.value && data.transaction_type==='income'){
+    analysisContent.append(createAnalysisSummary(data.basis==='offset'
+      ? '已分配收入按所选预算的份额计算，展开记录仍可查看原始到账。'
+      : '当前图表使用原始到账金额；分给所选预算的金额见上方“收入分配”汇总，或切换冲销口径查看份额统计。'));
+  }
 
   const coverage = data.rate_coverage;
   const coverageParts = [
@@ -1354,6 +1369,16 @@ async function openTransactionEditor(transactionId) {
     transaction.category_id,
   );
   updateEditorFieldState();
+  document.getElementById('editor-income-allocation-action')?.remove();
+  if(transaction.transaction_type==='income'){
+    const host=BudgetUI.node('div','','full-width');host.id='editor-income-allocation-action';
+    host.append(BudgetUI.node('p','此处修改真实到账。预算金额在收入分配中维护；已有分配不会因修改标签而搬移。','subtle-note'));
+    if(!transaction.offset_group_id||transaction.offset_group_kind==='income'){
+      host.append(BudgetUI.button('查看 / 修改收入预算分配',()=>IncomeAllocations.open(
+        transaction.offset_group_id?'offset_group':'transaction',transaction.offset_group_id||transaction.id,()=>loadSearch())));
+    }else host.append(BudgetUI.node('p','这笔是支出事项的回款，只冲减消费，不再作为收入分配。'));
+    editorForm.append(host);
+  }
   refreshPickers(editorDialog);
   openDialog(editorDialog);
 }

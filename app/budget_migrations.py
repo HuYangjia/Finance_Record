@@ -1,6 +1,24 @@
 """Idempotent migration of the per-budget storage catalog to a shared tree."""
 
 
+def migrate_income_allocations(c):
+    if 'funding_mode' not in {r['name'] for r in c.execute('PRAGMA table_info(budget_plans)')}:
+        c.execute("ALTER TABLE budget_plans ADD COLUMN funding_mode TEXT NOT NULL DEFAULT 'legacy'")
+    if c.execute("SELECT 1 FROM app_settings WHERE key='income_allocations_initialized'").fetchone():
+        return
+    # Only a known binding proves a funding relationship. Untagged historical plans stay explicit.
+    rows = list(c.execute('''SELECT f.*,p.total_minor FROM budget_plan_funding f
+                             JOIN budget_plans p ON p.id=f.plan_id WHERE p.total_minor IS NOT NULL'''))
+    for row in rows:
+        if row['total_minor'] > 0:
+            c.execute('''INSERT INTO budget_income_allocations
+                (plan_id,transaction_id,group_id,currency_code,amount_minor) VALUES (?,?,?,?,?)''',
+                (row['plan_id'],row['transaction_id'],row['group_id'],row['currency_code'],row['total_minor']))
+        c.execute("UPDATE budget_plans SET funding_mode='income' WHERE id=?", (row['plan_id'],))
+        c.execute('DELETE FROM budget_plan_funding WHERE plan_id=?', (row['plan_id'],))
+    c.execute("INSERT INTO app_settings(key,value) VALUES ('income_allocations_initialized','1')")
+
+
 def migrate_shared_storage(c):
     if 'budget_system_id' not in {r['name'] for r in c.execute('PRAGMA table_info(budget_storage_methods)')}:
         c.execute('CREATE UNIQUE INDEX IF NOT EXISTS budget_storage_shared_name ON budget_storage_methods(COALESCE(parent_id,0),name)')
