@@ -116,7 +116,10 @@ const searchDates = window.DateRangeControls.create({
 
 const editorDialog = document.querySelector("#transaction-editor-dialog");
 const editorForm = document.querySelector("#transaction-editor-form");
+const editorTitle = document.querySelector("#transaction-editor-title");
 const editorStatus = document.querySelector("#editor-status");
+const editorAdjustmentGuidance = document.querySelector("#editor-adjustment-guidance");
+const editorClassifyAdjustmentButton = document.querySelector("#editor-classify-adjustment");
 const editorTransactionId = document.querySelector("#editor-transaction-id");
 const editorDateInput = document.querySelector("#editor-transaction-date");
 const editorTypeSelect = document.querySelector("#editor-transaction-type");
@@ -458,7 +461,7 @@ function createActionButtons(record) {
   const editButton = document.createElement("button");
   editButton.className = "table-action";
   editButton.type = "button";
-  editButton.textContent = "编辑";
+  editButton.textContent = record.is_manual_adjustment ? "确认用途" : "编辑";
   editButton.addEventListener("click", () => {
     openTransactionEditor(record.id).catch((error) => setStatus(detailStatus, error.message, "error"));
   });
@@ -509,7 +512,17 @@ function renderAccountState(account) {
     { label: "期初日期", value: account.opening_balance_date },
     { label: "累计流入", value: `${account.total_inflow} ${account.currency_code}` },
     { label: "累计流出", value: `${account.total_outflow} ${account.currency_code}` },
-    { label: "最近对账", value: reconciliationValue, alert: reconciliation.status === "difference" },
+    {
+      label: "最近对账",
+      value: reconciliationValue,
+      alert: reconciliation.status === "difference",
+      action: reconciliation.manual_adjustment_count > 0
+        ? {
+            label: `查看 / 修改当日调整（${reconciliation.manual_adjustment_count}）`,
+            run: () => showReconciliationAdjustments(reconciliation.reconciliation_date),
+          }
+        : null,
+    },
   ];
   for (const item of items) {
     const card = document.createElement("article");
@@ -525,8 +538,30 @@ function renderAccountState(account) {
     label.textContent = item.label;
     value.textContent = item.value;
     card.append(label, value);
+    if (item.action) {
+      const button = document.createElement("button");
+      button.className = "table-action account-state-action";
+      button.type = "button";
+      button.textContent = item.action.label;
+      button.addEventListener("click", item.action.run);
+      card.append(button);
+    }
     stateTarget.append(card);
   }
+}
+
+function showReconciliationAdjustments(reconciliationDate) {
+  detailStartDateInput.value = reconciliationDate;
+  detailEndDateInput.value = reconciliationDate;
+  detailTransactionTypeSelect.value = "adjustment";
+  detailCategorySelect.value = "";
+  detailKeywordInput.value = "";
+  detailAdjustmentOnlyInput.checked = true;
+  detailFlaggedOnlyInput.checked = false;
+  refreshPickers(detailForm);
+  loadDetail(true)
+    .then(() => ledgerPanel.scrollIntoView({ behavior: "smooth", block: "start" }))
+    .catch((error) => setStatus(detailStatus, error.message, "error"));
 }
 
 function purposeFor(record) {
@@ -1359,6 +1394,16 @@ async function openTransactionEditor(transactionId) {
   editorInflowInput.value = transaction.inflow_amount || "";
   editorCounterpartyInput.value = transaction.counterparty || "";
   editorNoteInput.value = transaction.note || "";
+  const isManualAdjustment = transaction.transaction_type === "adjustment";
+  editorTitle.textContent = isManualAdjustment ? "确认对账调整用途" : "修改流水";
+  editorAdjustmentGuidance.hidden = !isManualAdjustment;
+  if (isManualAdjustment) {
+    const suggestedType = transaction.inflow_amount ? "income" : "expense";
+    editorClassifyAdjustmentButton.dataset.transactionType = suggestedType;
+    editorClassifyAdjustmentButton.textContent = suggestedType === "income"
+      ? "改为普通入账"
+      : "改为普通支出";
+  }
   if(editorBudgetSelect&&budgetConfig){
     setSelectOptions(editorBudgetSelect,budgetConfig.systems.filter(s=>s.is_active||s.id===transaction.budget_system_id),'未归属',s=>s.name+(s.is_active?'':'（停用）'));
     editorBudgetSelect.value=transaction.budget_system_id?String(transaction.budget_system_id):'';
@@ -1604,6 +1649,11 @@ nextSearchPageButton.addEventListener("click", () => {
 });
 
 editorTypeSelect.addEventListener("change", updateEditorFieldState);
+editorClassifyAdjustmentButton.addEventListener("click", () => {
+  editorTypeSelect.value = editorClassifyAdjustmentButton.dataset.transactionType;
+  updateEditorFieldState();
+  editorCategorySelect.focus();
+});
 
 editorForm.addEventListener("submit", async (event) => {
   event.preventDefault();

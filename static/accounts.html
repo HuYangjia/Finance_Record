@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>个人财务账本 - 账户与流水</title>
     <link rel="icon" href="/static/compass-rose.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/styles.css?v=20261018-3">
+    <link rel="stylesheet" href="/static/styles.css?v=20261021-1">
     <link rel="stylesheet" href="/static/workspace.css?v=20261018-2">
     <link rel="stylesheet" href="/static/income-allocations.css?v=20261020-3">
 </head>
@@ -262,8 +262,12 @@
     <dialog id="transaction-editor-dialog" class="app-dialog">
       <form id="transaction-editor-form" method="dialog">
         <div class="dialog-heading">
-          <h2>修改流水</h2>
+          <h2 id="transaction-editor-title">修改流水</h2>
           <button class="icon-button dialog-close" type="button" data-close-dialog="transaction-editor-dialog" aria-label="关闭" title="关闭">&#215;</button>
+        </div>
+        <div id="editor-adjustment-guidance" class="empty-notice editor-adjustment-guidance" hidden>
+          <span>这笔流水来自余额对账。查明原因后，可改成普通入账或支出并选择分类；保留同一账户、方向和金额时，余额不会再次变化，只会进入相应统计。</span>
+          <button id="editor-classify-adjustment" class="secondary-button" type="button"></button>
         </div>
         <input id="editor-transaction-id" type="hidden">
         <div class="detail-filter-grid">
@@ -445,6 +449,6 @@
     <script src="/static/frequent-picker.js?v=20261018-3"></script>
     <script src="/static/offset-ui.js?v=20261020-3"></script>
     <script src="/static/date-range.js?v=20261002-5"></script>
-    <script src="/static/accounts.js?v=20261020-3"></script>
+    <script src="/static/accounts.js?v=20261021-1"></script>
   </body>
 </html>

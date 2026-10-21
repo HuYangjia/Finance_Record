@@ -805,6 +805,16 @@ def latest_reconciliation_status(connection, account: dict[str, Any] | Any) -> d
         return {"status": "pending", "label": "待对账"}
     book_balance_minor = account_balance_as_of(connection, account, row["reconciliation_date"])
     difference_minor = row["actual_balance_minor"] - book_balance_minor
+    adjustment_row = connection.execute(
+        """
+        SELECT COUNT(*) AS adjustment_count
+        FROM transactions
+        WHERE transaction_date = ?
+          AND transaction_type = 'adjustment'
+          AND (source_account_id = ? OR destination_account_id = ?)
+        """,
+        (row["reconciliation_date"], account["id"], account["id"]),
+    ).fetchone()
     decimal_places = account["decimal_places"]
     return {
         "status": "matched" if difference_minor == 0 else "difference",
@@ -814,6 +824,7 @@ def latest_reconciliation_status(connection, account: dict[str, Any] | Any) -> d
         "book_balance": format_minor(book_balance_minor, decimal_places),
         "difference": format_minor(difference_minor, decimal_places),
         "note": row["note"],
+        "manual_adjustment_count": adjustment_row["adjustment_count"],
     }
 
 

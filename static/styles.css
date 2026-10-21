@@ -687,6 +687,18 @@ th {
   padding: 10px 12px;
 }
 
+.editor-adjustment-guidance {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  line-height: 1.55;
+}
+
+.editor-adjustment-guidance .secondary-button {
+  flex: 0 0 auto;
+}
+
 #form-status.success {
   color: #147462;
 }
@@ -752,6 +764,10 @@ th {
 .account-state-item strong {
   font-size: 16px;
   font-variant-numeric: tabular-nums;
+}
+
+.account-state-action {
+  margin-top: 9px;
 }
 
 .pager {

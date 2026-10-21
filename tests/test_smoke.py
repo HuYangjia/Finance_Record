@@ -119,6 +119,9 @@ class FinanceAppSmokeTest(unittest.TestCase):
             self.salary_category_id = connection.execute(
                 "SELECT id FROM categories WHERE kind = 'income' AND name = '工资/劳务'"
             ).fetchone()["id"]
+            self.interest_category_id = connection.execute(
+                "SELECT id FROM categories WHERE kind = 'income' AND name = '利息/股息'"
+            ).fetchone()["id"]
             self.payroll_expense_category_id = connection.execute(
                 """
                 SELECT id
@@ -991,6 +994,29 @@ class FinanceAppSmokeTest(unittest.TestCase):
             next(account for account in list_accounts() if account["code"] == "CNY-BANK-01")["balance"],
             "250.00",
         )
+        before_reclassification = account_detail(accounts["CNY-BANK-01"]["id"])["account"]
+        self.assertEqual(before_reclassification["reconciliation"]["manual_adjustment_count"], 1)
+
+        reclassified = update_transaction(
+            asset_adjustment["adjustment_transaction_id"],
+            TransactionUpdate(
+                transaction_date="2026-09-02",
+                transaction_type="income",
+                destination_account_id=accounts["CNY-BANK-01"]["id"],
+                inflow_amount="250",
+                category_id=self.interest_category_id,
+                note="补记利息",
+                correction_reason="确认对账差额是利息",
+            ),
+        )
+        self.assertEqual(reclassified["transaction_type"], "income")
+        self.assertEqual(reclassified["category_id"], self.interest_category_id)
+        after_reclassification = account_detail(accounts["CNY-BANK-01"]["id"])["account"]
+        self.assertEqual(after_reclassification["current_balance"], "250.00")
+        self.assertEqual(after_reclassification["reconciliation"]["status"], "matched")
+        self.assertEqual(after_reclassification["reconciliation"]["difference"], "0.00")
+        self.assertEqual(after_reclassification["reconciliation"]["manual_adjustment_count"], 0)
+        self.assertEqual(dashboard("2026-09")["cash_flow"][0]["income"], "250.00")
 
         liability_increase = create_balance_adjustment(
             accounts["CNY-CARD-01"]["id"],
