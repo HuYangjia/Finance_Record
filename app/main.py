@@ -812,6 +812,11 @@ def latest_reconciliation_status(connection, account: dict[str, Any] | Any) -> d
         WHERE transaction_date = ?
           AND transaction_type = 'adjustment'
           AND (source_account_id = ? OR destination_account_id = ?)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM investment_valuations
+              WHERE investment_valuations.generated_transaction_id = transactions.id
+          )
         """,
         (row["reconciliation_date"], account["id"], account["id"]),
     ).fetchone()
