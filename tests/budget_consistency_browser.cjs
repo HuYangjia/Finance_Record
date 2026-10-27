@@ -21,6 +21,9 @@ const base='http://127.0.0.1:18110';
   const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];
   page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
   const text=(selector,value)=>page.waitForFunction(([s,v])=>document.querySelector(s)?.textContent.includes(v),[selector,value]);
+  const setSearchBudgets=values=>page.locator('#search-budget-options input').evaluateAll((inputs,selected)=>{
+    for(const input of inputs){input.checked=selected.map(String).includes(input.value);input.dispatchEvent(new Event('change',{bubbles:true}));}
+  },values);
   try{
     await page.goto(`${base}/budgets?month=2026-10&system=${sid}`);await text('#budget-status','已加载');
     assert.equal(await page.locator('#plan-system').inputValue(),String(sid));
@@ -47,7 +50,7 @@ const base='http://127.0.0.1:18110';
       expected_token:detail.token,items:[{budget_system_id:sid,month:'2026-10',amount:'400'},{budget_system_id:sid,month:'2026-11',amount:'600'}]}}));
     await page.goto(base+'/accounts');await page.waitForLoadState('networkidle');
     await page.locator('.detail-view-mode[data-view=search]').click();
-    await page.selectOption('#search-budget-system',String(sid));
+    await setSearchBudgets([sid]);
     await page.fill('#search-start-date','2026-10-01');await page.fill('#search-end-date','2026-10-31');
     await page.locator('#search-type-options input[value=income]').check();
     await page.locator('#transaction-search-form button[type=submit]').click();
@@ -65,7 +68,7 @@ const base='http://127.0.0.1:18110';
       inflow_amount:'500',category_id:category}}));
     await page.goto(base+'/accounts');await page.waitForLoadState('networkidle');
     await page.locator('.detail-view-mode[data-view=search]').click();
-    await page.selectOption('#search-budget-system',String(sid));
+    await setSearchBudgets([sid]);
     await page.fill('#search-start-date','2026-10-01');await page.fill('#search-end-date','2026-10-31');
     await page.locator('#search-type-options input[value=income]').check();
     await page.selectOption('#cashflow-basis','offset');
@@ -75,7 +78,7 @@ const base='http://127.0.0.1:18110';
     await page.screenshot({path:'/tmp/finance-consistency-query.png',fullPage:true});
     // All-budget actual income still includes the corrected source; it is not
     // an allocation report and must not claim the source was removed from its chart.
-    await page.selectOption('#search-budget-system','');
+    await setSearchBudgets([]);
     await page.locator('#transaction-search-form button[type=submit]').click();
     await text('#analysis-status','已按 HKD 统计');
     assert.equal((await page.locator('#analysis-content').textContent()).includes('未计入本图'),false);

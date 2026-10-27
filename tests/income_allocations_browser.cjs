@@ -20,6 +20,9 @@ const base='http://127.0.0.1:18110';
   const pick=(id,value)=>page.locator('#'+id).evaluate((el,v)=>{
     el.value=String(v);el.dispatchEvent(new Event('change',{bubbles:true}));window.refreshFrequentPickers?.();
   },value);
+  const setSearchBudgets=values=>page.locator('#search-budget-options input').evaluateAll((inputs,selected)=>{
+    for(const input of inputs){input.checked=selected.map(String).includes(input.value);input.dispatchEvent(new Event('change',{bubbles:true}));}
+  },values);
   try{
     await page.goto(base+'/');await page.waitForFunction(()=>!document.querySelector('#income-budget-system').disabled);
     await page.locator('.entry-mode[data-mode=income]').click();
@@ -82,7 +85,7 @@ const base='http://127.0.0.1:18110';
 
     await page.goto(base+'/accounts');await page.waitForLoadState('networkidle');
     await page.locator('.detail-view-mode[data-view=search]').click();
-    await page.selectOption('#search-budget-system',String(other));
+    await setSearchBudgets([other]);
     // Use the raw API as well to verify that filtering never changes the underlying income.
     const query=await get(`/api/transactions/search?budget_system_id=${other}&transaction_types=income`);
     assert.equal(query.transactions[0].inflow_amount,'1000.00');

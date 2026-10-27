@@ -17,6 +17,9 @@ const base='http://127.0.0.1:18110';
   const get=async path=>{const r=await api.get(path);assert(r.ok(),await r.text());return r.json();};
   const text=async (selector,value)=>{await page.waitForFunction(([s,v])=>document.querySelector(s)?.textContent.includes(v),[selector,value]);};
   const pick=async (id,value)=>page.locator('#'+id).evaluate((el,v)=>{el.value=String(v);el.dispatchEvent(new Event('change',{bubbles:true}));window.refreshFrequentPickers?.();},value);
+  const setSearchBudgets=async values=>page.locator('#search-budget-options input').evaluateAll((inputs,selected)=>{
+    for(const input of inputs){input.checked=selected.map(String).includes(input.value);input.dispatchEvent(new Event('change',{bubbles:true}));}
+  },values);
   const config=await get('/api/budget/config'),daily=config.defaults.expense;
   const idle=()=>page.waitForFunction(()=>!document.querySelector('main').inert);
   const editPlan=async()=>{await page.locator('#month-plans tr[data-system-id="'+daily+'"]').getByRole('button').click();await page.waitForSelector('#plan-editor[open]');await idle();};
@@ -112,10 +115,14 @@ const base='http://127.0.0.1:18110';
   await page.locator('.entry-mode[data-mode=expense]').click();await page.screenshot({path:'/tmp/finance-budget-entry.png',fullPage:true});
   console.log('PASS original dropdowns, independent drafts, manual/default/rule/preset precedence and expense/income/FX saves');
 
-  await page.goto(base+'/accounts');await page.waitForFunction(()=>document.querySelector('#search-budget-system')?.options.length>2);
+  await page.goto(base+'/accounts');await page.waitForFunction(()=>document.querySelectorAll('#search-budget-options input').length>2);
   assert(await page.locator('#detail-account option').count()>2);assert(await page.locator('#detail-category option').count()>2);
-  await page.locator('.detail-view-mode[data-view=search]').click();await page.selectOption('#cashflow-basis','raw');await page.fill('#search-start-date','2026-10-01');await page.fill('#search-end-date','2026-10-31');await page.selectOption('#search-budget-system',String(daily));await page.locator('#search-type-options input[value=expense]').check();await page.locator('#transaction-search-form button[type=submit]').click();
+  await page.locator('.detail-view-mode[data-view=search]').click();await page.selectOption('#cashflow-basis','raw');await page.fill('#search-start-date','2026-10-01');await page.fill('#search-end-date','2026-10-31');await setSearchBudgets([daily]);await page.locator('#search-type-options input[value=expense]').check();await page.locator('#transaction-search-form button[type=submit]').click();
   await text('#transaction-search-summary-content','40.00');await text('#analysis-content','40.00');
+  await setSearchBudgets([daily,special]);await page.locator('#transaction-search-form button[type=submit]').click();await text('#transaction-search-summary-content','65.00');await text('#search-budget-summary','日常预算、专项预算');
+  await page.click('#select-all-expense-categories');assert.equal(await page.locator('#search-category-options input[data-kind=expense]:checked').count(),cats.length);
+  await page.click('#invert-expense-categories');assert.equal(await page.locator('#search-category-options input[data-kind=expense]:checked').count(),0);
+  await setSearchBudgets([daily]);await page.locator('#transaction-search-form button[type=submit]').click();
   await page.locator('#search-results-details summary').click();await text('#search-results-body','日常预算');
   await text('#search-results-body','自动');
   const edit=page.locator('#search-results-body button').filter({hasText:'编辑'}).first();await edit.click();await page.waitForSelector('#transaction-editor-dialog[open]');assert.equal(await page.locator('#editor-budget-system').inputValue(),'');await text('#editor-budget-system option:checked','日常预算');await page.selectOption('#editor-budget-system',String(special));await page.locator('#transaction-editor-form button[type=submit]').click();await page.waitForSelector('#transaction-editor-dialog[open]',{state:'hidden'});await text('#search-summary','0');
@@ -123,7 +130,7 @@ const base='http://127.0.0.1:18110';
   console.log('PASS page 3 dropdowns, budget search, summary, analysis and edit attribution');
 
   const members=(await get('/api/transactions/search')).transactions.filter(t=>['expense','income'].includes(t.transaction_type));
-  await page.selectOption('#search-budget-system','');await page.selectOption('#cashflow-basis','offset');await page.locator('#transaction-search-form button[type=submit]').click();
+  await setSearchBudgets([]);await page.selectOption('#cashflow-basis','offset');await page.locator('#transaction-search-form button[type=submit]').click();
   const ordinaryExpenseCount=members.filter(t=>t.transaction_type==='expense').length;
   await page.waitForFunction(count=>document.querySelectorAll('#search-results-body .offset-transaction-entry').length===count,ordinaryExpenseCount);
   assert.equal(await page.locator('#search-results-body .offset-transaction-entry').count(),ordinaryExpenseCount);
@@ -132,8 +139,8 @@ const base='http://127.0.0.1:18110';
   const groupResponse=await api.post('/api/offset-groups',{data:{title:'浏览器跨预算',kind:'expense',transaction_ids:members.map(t=>t.id)}});assert(groupResponse.ok(),await groupResponse.text());
   const main=await get(`/api/transactions/${members.find(t=>t.transaction_type==='expense').id}`);
   const update=await api.put(`/api/transactions/${main.id}`,{data:{...main,budget_system_id:null}});assert(update.ok(),await update.text());
-  await page.selectOption('#search-budget-system',String(special));await page.selectOption('#cashflow-basis','offset');await page.locator('#transaction-search-form button[type=submit]').click();await text('#budget-query-warning','浏览器跨预算');await text('#transaction-search-summary-content','仅已归属事项');
-  await page.selectOption('#search-budget-system','');await page.locator('#transaction-search-form button[type=submit]').click();await text('#transaction-search-summary-content','55.00');assert(await page.locator('#budget-query-warning').isHidden());
+  await setSearchBudgets([special]);await page.selectOption('#cashflow-basis','offset');await page.locator('#transaction-search-form button[type=submit]').click();await text('#budget-query-warning','浏览器跨预算');await text('#transaction-search-summary-content','仅已归属事项');
+  await setSearchBudgets([]);await page.locator('#transaction-search-form button[type=submit]').click();await text('#transaction-search-summary-content','55.00');assert(await page.locator('#budget-query-warning').isHidden());
   assert.equal(await page.locator('#search-results-body .offset-transaction-entry').count(),0);assert.equal(await page.locator('#search-results-body .offset-members').count(),1);
   console.log('PASS compact ordinary rows, detailed offset group, cross-budget warning and all-budget net counted once');
 

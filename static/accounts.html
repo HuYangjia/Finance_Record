@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>个人财务账本 - 账户与流水</title>
     <link rel="icon" href="/static/compass-rose.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/styles.css?v=20261021-1">
+    <link rel="stylesheet" href="/static/styles.css?v=20261027-1">
     <link rel="stylesheet" href="/static/workspace.css?v=20261018-2">
     <link rel="stylesheet" href="/static/income-allocations.css?v=20261020-3">
 </head>
@@ -159,7 +159,15 @@
         <form id="transaction-search-form">
           <div id="search-date-presets"></div>
           <div class="detail-filter-grid">
-            <label class="budget-filter-field"><span>消费自预算 / 预算归属</span><select id="search-budget-system"><option value="">全部预算</option><option value="0">未归属（不含日常支出）</option></select></label>
+            <details class="multi-select budget-filter-field" id="search-budget-select">
+              <summary><span>消费自预算 / 预算归属</span><strong id="search-budget-summary">全部预算</strong></summary>
+              <div class="filter-action-row" aria-label="预算快捷选择">
+                <button id="select-all-budgets" class="filter-action" type="button">全选</button>
+                <button id="invert-budgets" class="filter-action" type="button">反选</button>
+                <button id="clear-budgets" class="filter-action" type="button">清空（全部）</button>
+              </div>
+              <div id="search-budget-options" class="filter-option-list"></div>
+            </details>
             <label>
               <span>账户范围</span>
               <select id="search-account"></select>
@@ -193,6 +201,11 @@
             </fieldset>
             <details class="multi-select" id="search-category-select">
               <summary><span>分类</span><strong id="search-category-summary">全部分类</strong></summary>
+              <div class="filter-action-row" aria-label="分类快捷选择">
+                <button id="select-all-expense-categories" class="filter-action" type="button">全选支出</button>
+                <button id="invert-expense-categories" class="filter-action" type="button">反选支出</button>
+                <button id="clear-categories" class="filter-action" type="button">清空（全部）</button>
+              </div>
               <div id="search-category-options" class="filter-option-list"></div>
             </details>
             <label>
@@ -449,6 +462,6 @@
     <script src="/static/frequent-picker.js?v=20261018-3"></script>
     <script src="/static/offset-ui.js?v=20261020-3"></script>
     <script src="/static/date-range.js?v=20261002-5"></script>
-    <script src="/static/accounts.js?v=20261021-1"></script>
+    <script src="/static/accounts.js?v=20261027-1"></script>
   </body>
 </html>

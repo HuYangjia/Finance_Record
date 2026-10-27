@@ -19,7 +19,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.database import ROOT_DIR, connect, create_backup, initialize_database
-from app.budgets import router as budgets_router, require_system, budget_filter_sql
+from app.budgets import (
+    router as budgets_router,
+    require_system,
+    budget_filter_sql,
+    normalize_budget_filter_ids,
+)
 from app.budget_storage import router as budget_storage_router
 from app.entry_shortcuts import router as entry_shortcuts_router
 from app.income_allocations import router as income_allocations_router, AllocationItem, save_allocations
@@ -3203,6 +3208,7 @@ def search_transactions(
     limit: int = 50,
     offset: int = 0,
     budget_system_id: int | None = None,
+    budget_system_ids: list[int] = Query(default=[]),
 ):
     start_date = validate_optional_date(start_date, "开始日期")
     end_date = validate_optional_date(end_date, "结束日期")
@@ -3217,6 +3223,11 @@ def search_transactions(
     if invalid_types:
         raise HTTPException(status_code=422, detail="流水类型不支持。")
     category_ids = list(dict.fromkeys(category_ids))
+    if not isinstance(budget_system_ids, list):
+        budget_system_ids = []
+    budget_system_ids = normalize_budget_filter_ids(
+        budget_system_ids, budget_system_id
+    )
     if any(category_id < 1 for category_id in category_ids):
         raise HTTPException(status_code=422, detail="分类编号必须大于零。")
     if limit < 1 or limit > 200:
@@ -3237,7 +3248,7 @@ def search_transactions(
         manual_adjustments_only,
         flagged_only,
     )
-    budget_filter_sql(filters, parameters, budget_system_id)
+    budget_filter_sql(filters, parameters, budget_system_ids=budget_system_ids)
     where_clause = f" WHERE {' AND '.join(filters)}" if filters else ""
 
     transaction_query = """
@@ -3326,7 +3337,7 @@ def search_transactions(
         from app.income_allocations import allocations_for_transactions, allocation_metadata
         allocation_rows, allocation_totals = allocations_for_transactions(
             connection, [r['id'] for r in summary_rows if r['transaction_type']=='income'],
-            budget_system_id)
+            budget_system_ids if budget_system_ids else None)
         allocation_info = allocation_metadata([r for rows in allocation_rows.values() for r in rows])
 
     transactions = [
@@ -3389,6 +3400,7 @@ def search_transactions(
             "end_date": end_date,
             "transaction_types": transaction_types,
             "budget_system_id": budget_system_id,
+            "budget_system_ids": budget_system_ids,
             "category_ids": category_ids,
             "keyword": keyword,
             "manual_adjustments_only": manual_adjustments_only,
@@ -3685,6 +3697,7 @@ def transaction_analysis(
     manual_adjustments_only: bool = False,
     flagged_only: bool = False,
     budget_system_id: int | None = None,
+    budget_system_ids: list[int] = Query(default=[]),
 ):
     start_date = validate_optional_date(start_date, "开始日期")
     end_date = validate_optional_date(end_date, "结束日期")
@@ -3699,6 +3712,11 @@ def transaction_analysis(
     if not isinstance(category_ids, list):
         category_ids = []
     category_ids = list(dict.fromkeys(category_ids))
+    if not isinstance(budget_system_ids, list):
+        budget_system_ids = []
+    budget_system_ids = normalize_budget_filter_ids(
+        budget_system_ids, budget_system_id
+    )
     if any(category_id < 1 for category_id in category_ids):
         raise HTTPException(status_code=422, detail="分类编号必须大于零。")
     keyword = clean_optional_text(keyword)
@@ -3742,7 +3760,7 @@ def transaction_analysis(
         search_term = f"%{keyword}%"
         parameters.extend([search_term] * 5)
 
-    budget_filter_sql(filters, parameters, budget_system_id)
+    budget_filter_sql(filters, parameters, budget_system_ids=budget_system_ids)
     where_clause = f" WHERE {' AND '.join(filters)}"
     with connect() as connection:
         if account_id is not None:
@@ -3799,6 +3817,7 @@ def transaction_analysis(
     result["filters"] = {
         "account_id": account_id,
         "budget_system_id": budget_system_id,
+        "budget_system_ids": budget_system_ids,
         "start_date": start_date,
         "end_date": end_date,
         "transaction_type": transaction_type,

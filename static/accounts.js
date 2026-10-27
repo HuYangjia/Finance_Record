@@ -65,7 +65,8 @@ const previousDetailPageButton = document.querySelector("#previous-page");
 const nextDetailPageButton = document.querySelector("#next-page");
 
 const searchForm = document.querySelector("#transaction-search-form");
-const searchBudgetSelect = document.querySelector('#search-budget-system');
+const searchBudgetOptions = document.querySelector('#search-budget-options');
+const searchBudgetSummary = document.querySelector('#search-budget-summary');
 const editorBudgetSelect = document.querySelector('#editor-budget-system');
 let budgetConfig = null;
 
@@ -74,7 +75,7 @@ async function loadBudgetFilters() {
     budgetConfig=await request('/api/budget/config');
     const dailyHint=document.querySelector('#daily-budget-hint');
     if(dailyHint)dailyHint.textContent=`未单独指定预算的支出，自动计入「${budgetConfig.systems.find(s=>s.id===budgetConfig.daily_expense)?.name||'日常预算'}」，包含历史消费。`;
-    if(searchBudgetSelect)for(const system of budgetConfig.systems){const option=document.createElement('option');option.value=system.id;option.textContent=system.name+(system.is_active?'':'（停用）');searchBudgetSelect.append(option);}
+    renderSearchBudgetOptions(budgetConfig.systems);
   } catch(e) {
     const warning=document.querySelector('#budget-query-warning');
     if(warning){warning.textContent='预算选项加载失败，请刷新重试。账户与分类查询仍可使用。';warning.hidden=false;}
@@ -296,6 +297,50 @@ function selectedSearchTypes() {
   );
 }
 
+function selectedSearchBudgets() {
+  return Array.from(
+    searchBudgetOptions?.querySelectorAll("input:checked") || [],
+    (input) => input.value,
+  );
+}
+
+function updateBudgetSummary() {
+  if (!searchBudgetSummary) return;
+  const selected = Array.from(searchBudgetOptions?.querySelectorAll("input:checked") || []);
+  if (!selected.length) {
+    searchBudgetSummary.textContent = "全部预算";
+  } else if (selected.length <= 2) {
+    searchBudgetSummary.textContent = selected.map((input) => input.dataset.label).join("、");
+  } else {
+    searchBudgetSummary.textContent = `已选 ${selected.length} 个预算`;
+  }
+}
+
+function renderSearchBudgetOptions(systems) {
+  if (!searchBudgetOptions) return;
+  searchBudgetOptions.replaceChildren();
+  const records = [
+    { id: 0, name: "未归属（不含日常支出）" },
+    ...systems.map((system) => ({
+      id: system.id,
+      name: system.name + (system.is_active ? "" : "（停用）"),
+    })),
+  ];
+  for (const record of records) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    const text = document.createElement("span");
+    checkbox.type = "checkbox";
+    checkbox.value = record.id;
+    checkbox.dataset.label = record.name;
+    checkbox.addEventListener("change", updateBudgetSummary);
+    text.textContent = record.name;
+    label.append(checkbox, text);
+    searchBudgetOptions.append(label);
+  }
+  updateBudgetSummary();
+}
+
 function selectedSearchCategories() {
   return Array.from(
     searchCategoryOptions.querySelectorAll("input:checked"),
@@ -372,7 +417,9 @@ function buildSearchPath() {
     limit: String(state.searchLimit),
     offset: String(state.search.offset),
   });
-  if(searchBudgetSelect?.value)parameters.set('budget_system_id',searchBudgetSelect.value);
+  for (const budgetId of selectedSearchBudgets()) {
+    parameters.append('budget_system_ids', budgetId);
+  }
   if (searchAccountSelect.value) {
     parameters.set(isOffsetBasis() ? "involved_account_id" : "account_id", searchAccountSelect.value);
   }
@@ -760,9 +807,9 @@ function createSearchSummarySection(title, records, currencyLabel, includeCovera
 function renderTransactionSearchSummary(summary) {
   transactionSearchSummaryContent.replaceChildren();
   transactionSearchSummaryMeta.textContent = "";
-  if(summary.budget_income_allocations?.length||Number(searchBudgetSelect.value)>0){
+  if(summary.budget_income_allocations?.length||selectedSearchBudgets().some(id=>Number(id)>0)){
     const section=BudgetUI.node('section','','budget-allocation-summary');
-    section.append(BudgetUI.node('h3',searchBudgetSelect.value?'分配给所选预算的收入（已核实部分）':'已分配到预算的收入（已核实部分）'));
+    section.append(BudgetUI.node('h3',selectedSearchBudgets().length?'分配给所选预算的收入（已核实部分）':'已分配到预算的收入（已核实部分）'));
     for(const row of summary.budget_income_allocations)section.append(BudgetUI.node('strong',`${row.amount} ${row.currency_code} `));
     if(!summary.budget_income_allocations.length)section.append(BudgetUI.node('p','匹配来源没有分配给所选预算的收入，分配合计为 0。'));
     transactionSearchSummaryContent.append(section);
@@ -884,7 +931,9 @@ function buildAnalysisPath() {
     end_date: searchEndDateInput.value,
     transaction_type: selectedSearchTypes()[0],
   });
-  if(searchBudgetSelect?.value)parameters.set('budget_system_id',searchBudgetSelect.value);
+  for (const budgetId of selectedSearchBudgets()) {
+    parameters.append('budget_system_ids', budgetId);
+  }
   if (searchAccountSelect.value) {
     parameters.set(isOffsetBasis() ? "involved_account_id" : "account_id", searchAccountSelect.value);
   }
@@ -1129,8 +1178,8 @@ function createDistributionTable(title, records, amountLabel, includeAmountShare
 function renderTransactionAnalysis(data) {
   analysisContent.replaceChildren();
   analysisConstraint.hidden = true;
-  if(Number(searchBudgetSelect.value)>0&&data.allocation_warnings?.length)analysisContent.append(createAnalysisSummary('收入来源存在超配或无法核实的分配，未计入本图；请按上方来源提示核对，当前仅展示可核实部分。'));
-  if(searchBudgetSelect.value && data.transaction_type==='income'){
+  if(selectedSearchBudgets().some(id=>Number(id)>0)&&data.allocation_warnings?.length)analysisContent.append(createAnalysisSummary('收入来源存在超配或无法核实的分配，未计入本图；请按上方来源提示核对，当前仅展示可核实部分。'));
+  if(selectedSearchBudgets().length && data.transaction_type==='income'){
     analysisContent.append(createAnalysisSummary(data.basis==='offset'
       ? '已分配收入按所选预算的份额计算，展开记录仍可查看原始到账。'
       : '当前图表使用原始到账金额；分给所选预算的金额见上方“收入分配”汇总，或切换冲销口径查看份额统计。'));
@@ -1228,7 +1277,7 @@ async function loadTransactionAnalysis(serial = searchRequestId) {
     const data = await request(buildAnalysisPath());
     if (serial !== searchRequestId) return;
     renderTransactionAnalysis(data);
-    setStatus(analysisStatus, Number(searchBudgetSelect.value)>0&&data.allocation_warnings?.length?'按 HKD 统计 · 分配来源待核实，仅显示已核实部分':data.budget_warnings?.length ? '按 HKD 统计 · 未包含跨预算待归属事项' : "已按 HKD 统计", "success");
+    setStatus(analysisStatus, selectedSearchBudgets().some(id=>Number(id)>0)&&data.allocation_warnings?.length?'按 HKD 统计 · 分配来源待核实，仅显示已核实部分':data.budget_warnings?.length ? '按 HKD 统计 · 未包含跨预算待归属事项' : "已按 HKD 统计", "success");
   } catch (error) {
     if (serial !== searchRequestId) return;
     analysisConstraint.textContent = error.message;
@@ -1306,6 +1355,7 @@ function renderSearchCategoryOptions(categories) {
       const text = document.createElement("span");
       checkbox.type = "checkbox";
       checkbox.value = category.id;
+      checkbox.dataset.kind = category.kind;
       checkbox.addEventListener("change", updateCategorySummary);
       text.textContent = formatCategoryName(category);
       label.append(checkbox, text);
@@ -1617,8 +1667,43 @@ searchForm.addEventListener("submit", (event) => {
   loadSearch(true).catch((error) => setStatus(searchStatus, error.message, "error"));
 });
 
+function updateCheckboxes(container, predicate, mode) {
+  for (const checkbox of container?.querySelectorAll("input[type=checkbox]") || []) {
+    if (!predicate(checkbox)) continue;
+    checkbox.checked = mode === "all" ? true : mode === "invert" ? !checkbox.checked : false;
+  }
+}
+
+document.querySelector("#select-all-budgets").addEventListener("click", () => {
+  updateCheckboxes(searchBudgetOptions, () => true, "all");
+  updateBudgetSummary();
+});
+document.querySelector("#invert-budgets").addEventListener("click", () => {
+  updateCheckboxes(searchBudgetOptions, () => true, "invert");
+  updateBudgetSummary();
+});
+document.querySelector("#clear-budgets").addEventListener("click", () => {
+  updateCheckboxes(searchBudgetOptions, () => true, "clear");
+  updateBudgetSummary();
+});
+document.querySelector("#select-all-expense-categories").addEventListener("click", () => {
+  updateCheckboxes(searchCategoryOptions, (checkbox) => checkbox.dataset.kind === "expense", "all");
+  updateCategorySummary();
+});
+document.querySelector("#invert-expense-categories").addEventListener("click", () => {
+  updateCheckboxes(searchCategoryOptions, (checkbox) => checkbox.dataset.kind === "expense", "invert");
+  updateCategorySummary();
+});
+document.querySelector("#clear-categories").addEventListener("click", () => {
+  updateCheckboxes(searchCategoryOptions, () => true, "clear");
+  updateCategorySummary();
+});
+
 document.querySelector("#clear-search-filters").addEventListener("click", () => {
-  if(searchBudgetSelect)searchBudgetSelect.value='';
+  for (const checkbox of searchBudgetOptions?.querySelectorAll("input") || []) {
+    checkbox.checked = false;
+  }
+  updateBudgetSummary();
   searchAccountSelect.value = "";
   searchDates.reset();
   searchKeywordInput.value = "";

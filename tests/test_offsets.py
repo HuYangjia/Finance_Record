@@ -304,6 +304,10 @@ class OffsetTest(unittest.TestCase):
         for url in ('/','/overview','/accounts','/investments','/offsets'):
             page=client.get(url);self.assertEqual(page.status_code,200);self.assertIn('href="/offsets"',page.text)
             self.assertEqual(page.headers['cache-control'],'no-store')
+        accounts_page=client.get('/accounts').text
+        self.assertIn('id="search-budget-options"',accounts_page)
+        self.assertIn('id="select-all-expense-categories"',accounts_page)
+        self.assertIn('id="invert-expense-categories"',accounts_page)
         self.assertEqual(client.get('/api/dashboard?month=2026-09&basis=offset').json()['personal_cash_flow']['valuations'][0]['expense'],'20.00')
         self.assertEqual(client.get('/api/export.xlsx?month=2026-09&basis=offset').status_code,200)
         client.close()

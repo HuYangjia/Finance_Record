@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field
 
 from app.database import connect, create_backup
 from app.personal_cashflow import (read_ledger, build_entries, make_entry, serialize_entry,
-                                   public_member, filter_entries, summarize, analyze, validate_filters)
+                                   public_member, filter_entries, summarize, analyze, validate_filters,
+                                   entry_budget_ids)
+from app.budgets import normalize_budget_filter_ids
 
 router = APIRouter()
 
@@ -153,7 +155,8 @@ def get_group(group_id: int):
 
 def query_entries(start_date=None, end_date=None, transaction_types=None, category_ids=None,
                   involved_account_id=None, keyword=None, flagged_only=False, limit=50, offset=0,
-                  groups_only=False, entry_type=None, budget_system_id=None):
+                  groups_only=False, entry_type=None, budget_system_id=None, budget_system_ids=None):
+    selected_budgets = normalize_budget_filter_ids(budget_system_ids, budget_system_id)
     filters = dict(start_date=start_date, end_date=end_date, transaction_types=transaction_types or [],
                    category_ids=category_ids or [], involved_account_id=involved_account_id,
                    keyword=keyword, flagged_only=flagged_only, entry_type=entry_type)
@@ -164,16 +167,23 @@ def query_entries(start_date=None, end_date=None, transaction_types=None, catego
             raise HTTPException(404, '账户不存在。')
         entries = build_entries(*read_ledger(connection))
         from app.income_allocations import project_income_budget
-        entries = project_income_budget(connection,entries,budget_system_id)
+        entries = project_income_budget(connection, entries, selected_budgets or None)
     if groups_only:
         entries = [e for e in entries if e['entry_type'] == 'offset_group']
     entries = filter_entries(entries, **filters)
     warnings = []
-    if budget_system_id is not None:
-        warnings = [{'id':e['id'],'title':e['title']} for e in entries if e['budget_mixed'] and any(
-            m['transaction_type']==e['kind'] and m.get('effective_budget_system_id',m.get('budget_system_id'))==(budget_system_id or None) for m in e['members'])]
-    filters.update(budget_system_id=budget_system_id, budget_warnings=warnings)
-    return filter_entries(entries, budget_system_id=budget_system_id), filters
+    if selected_budgets:
+        selected_set = set(selected_budgets)
+        warnings = [
+            {'id': entry['id'], 'title': entry['title']}
+            for entry in entries
+            if entry['budget_mixed']
+            and entry_budget_ids(entry) & selected_set
+            and not entry_budget_ids(entry).issubset(selected_set)
+        ]
+    filters.update(budget_system_id=budget_system_id, budget_system_ids=selected_budgets,
+                   budget_warnings=warnings)
+    return filter_entries(entries, budget_system_ids=selected_budgets), filters
 
 
 @router.get('/api/personal-cashflow/search')
@@ -181,13 +191,16 @@ def search_personal(start_date: str | None = None, end_date: str | None = None,
                     transaction_types: list[str] = Query(default=[]), category_ids: list[int] = Query(default=[]),
                     involved_account_id: int | None = None, keyword: str | None = None,
                     flagged_only: bool = False, limit: int = 50, offset: int = 0, manual_adjustments_only: bool = False,
-                    entry_type: Literal['transaction', 'offset_group'] | None = None, budget_system_id: int | None = None):
+                    entry_type: Literal['transaction', 'offset_group'] | None = None,
+                    budget_system_id: int | None = None,
+                    budget_system_ids: list[int] = Query(default=[])):
     if manual_adjustments_only:
         raise HTTPException(422, "冲销后收支不支持仅手工调整条件。")
     types = transaction_types if isinstance(transaction_types, list) else []
     categories = category_ids if isinstance(category_ids, list) else []
     entries, filters = query_entries(start_date, end_date, types, categories, involved_account_id,
-                                      keyword, flagged_only, limit, offset, entry_type=entry_type, budget_system_id=budget_system_id)
+                                      keyword, flagged_only, limit, offset, entry_type=entry_type,
+                                      budget_system_id=budget_system_id, budget_system_ids=budget_system_ids)
     return {'basis': 'offset', 'filters': filters, 'budget_warnings': filters['budget_warnings'], 'pagination': {'limit': limit, 'offset': offset, 'total': len(entries)},
             'entries': [serialize_entry(e) for e in entries[offset:offset+limit]],
             'summary': {**summarize(entries), 'budget_complete': not filters['budget_warnings'] and
@@ -209,11 +222,15 @@ def list_groups(start_date: str | None = None, end_date: str | None = None, kind
 def analyze_personal(start_date: str, end_date: str, transaction_type: Literal['income', 'expense'],
                      category_ids: list[int] = Query(default=[]), involved_account_id: int | None = None,
                      keyword: str | None = None, flagged_only: bool = False, manual_adjustments_only: bool = False,
-                     entry_type: Literal['transaction', 'offset_group'] | None = None, budget_system_id: int | None = None):
+                     entry_type: Literal['transaction', 'offset_group'] | None = None,
+                     budget_system_id: int | None = None,
+                     budget_system_ids: list[int] = Query(default=[])):
     if manual_adjustments_only:
         raise HTTPException(422, "冲销后收支不支持仅手工调整条件。")
     categories = category_ids if isinstance(category_ids, list) else []
-    entries, filters = query_entries(start_date, end_date, [transaction_type], categories, involved_account_id, keyword, flagged_only, entry_type=entry_type, budget_system_id=budget_system_id)
+    entries, filters = query_entries(start_date, end_date, [transaction_type], categories,
+                                     involved_account_id, keyword, flagged_only, entry_type=entry_type,
+                                     budget_system_id=budget_system_id, budget_system_ids=budget_system_ids)
     from app.income_allocations import allocation_metadata
     return {**analyze(entries, start_date, end_date, transaction_type), 'budget_warnings': filters['budget_warnings'],
             **allocation_metadata([r for e in entries for r in e.get('income_allocations',[])])}

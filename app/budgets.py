@@ -49,26 +49,48 @@ def require_system(c, system_id, allow_inactive=False):
     return dict(row)
 
 
-def budget_filter_sql(filters, parameters, budget_system_id):
-    """Filter the effective budget; untagged expenses inherit the daily system."""
+def normalize_budget_filter_ids(budget_system_ids=None, budget_system_id=None):
+    """Return a stable plural budget filter while retaining the old scalar API."""
+    if isinstance(budget_system_ids, int):
+        selected = [budget_system_ids]
+    elif isinstance(budget_system_ids, (list, tuple, set)):
+        selected = list(budget_system_ids)
+    else:
+        # FastAPI Query defaults remain parameter objects in direct function tests.
+        selected = []
+    if budget_system_id is not None:
+        selected.append(budget_system_id)
+    selected = list(dict.fromkeys(selected))
+    if any(not isinstance(value, int) or value < 0 for value in selected):
+        raise HTTPException(422, '预算筛选不正确。')
+    return selected
+
+
+def budget_filter_sql(filters, parameters, budget_system_id=None, budget_system_ids=None):
+    """Filter effective budgets by union; untagged expenses inherit daily."""
+    selected = normalize_budget_filter_ids(budget_system_ids, budget_system_id)
     effective = """COALESCE(transactions.budget_system_id, CASE WHEN transactions.transaction_type='expense'
         THEN (SELECT CAST(value AS INTEGER) FROM app_settings WHERE key='daily_expense_budget_system_id') END)"""
-    if budget_system_id is not None:
-        if budget_system_id < 0:
-            raise HTTPException(422, '预算筛选不正确。')
-        if budget_system_id == 0:
-            filters.append(f'''{effective} IS NULL AND NOT EXISTS (
-                SELECT 1 FROM budget_income_allocations a WHERE a.transaction_id=transactions.id
-                OR a.group_id=(SELECT group_id FROM transaction_offset_members WHERE transaction_id=transactions.id))''')
-        else:
-            filters.append(f'''(({effective} = ? AND NOT (transactions.transaction_type='income' AND EXISTS (
-                SELECT 1 FROM budget_income_allocations a WHERE a.transaction_id=transactions.id
-                OR a.group_id=(SELECT group_id FROM transaction_offset_members WHERE transaction_id=transactions.id))))
-                OR (transactions.transaction_type='income' AND EXISTS (
-                SELECT 1 FROM budget_income_allocations a JOIN budget_plans p ON p.id=a.plan_id
-                WHERE p.budget_system_id=? AND (a.transaction_id=transactions.id
-                OR a.group_id=(SELECT group_id FROM transaction_offset_members WHERE transaction_id=transactions.id)))))''')
-            parameters.extend([budget_system_id,budget_system_id])
+    if not selected:
+        return
+    clauses = []
+    positive = [value for value in selected if value > 0]
+    allocation_exists = '''EXISTS (
+        SELECT 1 FROM budget_income_allocations a WHERE a.transaction_id=transactions.id
+        OR a.group_id=(SELECT group_id FROM transaction_offset_members WHERE transaction_id=transactions.id))'''
+    if 0 in selected:
+        clauses.append(f'''({effective} IS NULL AND NOT {allocation_exists})''')
+    if positive:
+        placeholders = ', '.join('?' for _ in positive)
+        clauses.append(f'''({effective} IN ({placeholders}) AND NOT (
+            transactions.transaction_type='income' AND {allocation_exists}))''')
+        parameters.extend(positive)
+        clauses.append(f'''(transactions.transaction_type='income' AND EXISTS (
+            SELECT 1 FROM budget_income_allocations a JOIN budget_plans p ON p.id=a.plan_id
+            WHERE p.budget_system_id IN ({placeholders}) AND (a.transaction_id=transactions.id
+            OR a.group_id=(SELECT group_id FROM transaction_offset_members WHERE transaction_id=transactions.id))))''')
+        parameters.extend(positive)
+    filters.append(f"({' OR '.join(clauses)})")
 
 
 def paths(rows):

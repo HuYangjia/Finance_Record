@@ -8,7 +8,11 @@ from decimal import Decimal
 from fastapi import HTTPException
 
 from app.reporting import amount_to_base_currency, format_decimal, summarize_daily_records
-from app.budgets import daily_expense_system, effective_budget
+from app.budgets import (
+    daily_expense_system,
+    effective_budget,
+    normalize_budget_filter_ids,
+)
 
 
 def read_ledger(connection):
@@ -61,6 +65,7 @@ def make_entry(metadata, members, rates, entry_type='offset_group'):
     budgets = {m.get('effective_budget_system_id',m.get('budget_system_id')) for m in primary_members}
     result['budget_mixed'] = len(budgets)>1
     result['budget_system_id'] = next(iter(budgets)) if len(budgets)==1 else None
+    result['budget_system_ids'] = sorted(0 if value is None else value for value in budgets)
     result['budget_system_name'] = '跨预算 / 待归属' if len(budgets)>1 else (primary_members[0].get('effective_budget_system_name',primary_members[0].get('budget_system_name')) or '未归属')
     result['involved_accounts'] = list({m['account_id']: {'id': m['account_id'], 'name': m['account_name']}
                                        for m in members}.values())
@@ -156,17 +161,24 @@ def validate_filters(start_date=None, end_date=None, transaction_types=None, cat
         raise HTTPException(422, '关键词不能超过 120 个字符。')
 
 
+def entry_budget_ids(entry):
+    values = entry.get('budget_system_ids')
+    if values is not None:
+        return set(values)
+    return {entry.get('budget_system_id') or 0}
+
+
 def filter_entries(entries, start_date=None, end_date=None, transaction_types=None,
-                   category_ids=None, involved_account_id=None, keyword=None, flagged_only=False, entry_type=None, budget_system_id=None, **_):
-    if budget_system_id is not None and budget_system_id < 0:
-        raise HTTPException(422, '预算筛选不正确。')
+                   category_ids=None, involved_account_id=None, keyword=None, flagged_only=False,
+                   entry_type=None, budget_system_id=None, budget_system_ids=None, **_):
+    selected_budgets = set(normalize_budget_filter_ids(budget_system_ids, budget_system_id))
     if entry_type not in (None, 'transaction', 'offset_group'):
         raise HTTPException(422, '统计记录类型不支持。')
     validate_filters(start_date, end_date, transaction_types, category_ids, involved_account_id, keyword)
     result = []
     keyword = (keyword or '').strip().casefold()
     for entry in entries:
-        if budget_system_id is not None and (entry['budget_mixed'] or entry['budget_system_id'] != (budget_system_id or None)):
+        if selected_budgets and not entry_budget_ids(entry).issubset(selected_budgets):
             continue
         if entry_type and entry['entry_type'] != entry_type:
             continue

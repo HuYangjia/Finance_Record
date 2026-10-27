@@ -27,6 +27,7 @@
 - 开始日期、结束日期。
 - 唯一选中的流水类型。
 - 已选分类。
+- 已选的多个预算归属（并集口径）。
 - 对象、分类或备注关键词。
 - 仅手工调整、仅待核实状态。
 
@@ -121,6 +122,7 @@ GET /api/transactions/analysis
 - `start_date`、`end_date` 必填。
 - `transaction_type` 必填且只能是一种。
 - `category_ids` 可重复。
+- `budget_system_ids` 可重复，`0` 表示未归属；不传表示全部。旧 `budget_system_id` 保留为单选兼容参数。
 - `account_id`、`keyword`、`manual_adjustments_only`、`flagged_only` 可选。
 
 返回数据包含：

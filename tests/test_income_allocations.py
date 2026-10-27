@@ -209,6 +209,15 @@ class IncomeAllocationTest(unittest.TestCase):
         self.assertEqual(data['summary']['budget_income_allocations'],[dict(currency_code='HKD',amount='400.00')])
         net=self.call('GET',f'/api/personal-cashflow/search?budget_system_id={other}&transaction_types=income&start_date=2026-10-01&end_date=2026-10-31')
         self.assertEqual(next(v for v in net['summary']['valuations'] if v['currency_code']=='HKD')['income'],'400.00')
+        plural=f'budget_system_ids={self.daily}&budget_system_ids={other}'
+        combined=self.call('GET',f'/api/transactions/search?{plural}&transaction_types=income')
+        self.assertEqual(combined['pagination']['total'],1)
+        self.assertEqual(combined['summary']['budget_income_allocations'],[
+            dict(currency_code='HKD',amount='1000.00')])
+        net=self.call('GET',f'/api/personal-cashflow/search?{plural}&transaction_types=income&start_date=2026-10-01&end_date=2026-10-31')
+        self.assertEqual(net['pagination']['total'],1)
+        self.assertEqual(next(v for v in net['summary']['valuations'] if v['currency_code']=='HKD')['income'],'1000.00')
+        self.assertEqual(len(net['entries'][0]['income_allocations']),2)
         self.assertEqual(self.call('GET',f'/api/transactions/{source}')['inflow_amount'],'1000.00')
 
     def test_migration_known_binding_and_idempotence_keeps_unbound_plan(self):

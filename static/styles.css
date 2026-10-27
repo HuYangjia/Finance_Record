@@ -396,6 +396,35 @@ main {
   font-weight: 400;
 }
 
+.filter-action-row {
+  align-items: center;
+  border-top: 1px solid #d9e0e5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px 0;
+}
+
+.filter-action {
+  background: #f4f7f6;
+  border-color: #b9c5cd;
+  color: #176b5f;
+  font-size: 12px;
+  font-weight: 700;
+  min-height: 28px;
+  padding: 4px 9px;
+}
+
+.filter-action:hover,
+.filter-action:focus-visible {
+  background: #e5f0ed;
+  border-color: #176b5f;
+}
+
+.filter-action-row + .filter-option-list {
+  border-top: 0;
+}
+
 .filter-option-list {
   border-top: 1px solid #d9e0e5;
   display: grid;

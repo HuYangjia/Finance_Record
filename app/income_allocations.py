@@ -331,13 +331,22 @@ def allocation_metadata(rows):
                 allocation_complete=not warnings,allocation_note=ALLOCATION_NOTE)
 
 
-def allocations_for_transactions(c, transaction_ids, budget_system_id=None):
+def _budget_selection(value):
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return {value}
+    return set(value)
+
+
+def allocations_for_transactions(c, transaction_ids, budget_system_ids=None):
     """Metadata only: a source group is returned once in the separate summary."""
     ids = set(transaction_ids)
+    selected_systems = _budget_selection(budget_system_ids)
     memberships = {r['transaction_id']:r['group_id'] for r in c.execute('SELECT * FROM transaction_offset_members')}
     groups = {memberships[i] for i in ids if i in memberships}
     selected = [r for r in allocation_records(c) if (r['transaction_id'] in ids or r['group_id'] in groups)
-                and (budget_system_id is None or r['budget_system_id']==budget_system_id)]
+                and (selected_systems is None or r['budget_system_id'] in selected_systems)]
     per_transaction = {i:[r for r in selected if r['transaction_id']==i or
                           r['group_id'] is not None and r['group_id']==memberships.get(i)] for i in ids}
     totals = {}
@@ -347,9 +356,10 @@ def allocations_for_transactions(c, transaction_ids, budget_system_id=None):
     return per_transaction, [dict(currency_code=code,amount=money(value,currency(c,code))) for code,value in sorted(totals.items())]
 
 
-def project_income_budget(c, entries, system_id):
+def project_income_budget(c, entries, budget_system_ids):
     """Budget-filtered personal reports use allocated portions, retaining original members."""
     from app.personal_cashflow import value_entry
+    selected_systems = _budget_selection(budget_system_ids)
     rates = [dict(r) for r in c.execute('SELECT * FROM daily_cny_exchange_rates ORDER BY rate_date')]
     allocations = allocation_records(c)
     result = []
@@ -360,23 +370,32 @@ def project_income_budget(c, entries, system_id):
             continue
         if not matched:
             # Legacy tags remain searchable in raw records, but never create budget funding.
-            if system_id is None:
+            if selected_systems is None:
                 result.append(entry)
-            elif system_id==0:
-                result.append(dict(entry,budget_system_id=None,budget_system_name=None,budget_mixed=False))
+            elif 0 in selected_systems:
+                result.append(dict(entry,budget_system_id=None,budget_system_ids=[0],
+                                   budget_system_name=None,budget_mixed=False))
             continue
-        if system_id is None:
+        if selected_systems is None:
             result.append(dict(entry,budget_system_name='、'.join(dict.fromkeys(r['budget_name'] for r in matched)),
                                income_allocations=matched))
             continue
-        selected = [r for r in matched if r['budget_system_id']==system_id]
+        selected = [r for r in matched if r['budget_system_id'] in selected_systems]
         if not selected:
             continue
         synthetic = [dict(id=r['id'],amount=Decimal(money(r['amount_minor'],currency(c,r['budget_currency']))),
                           currency_code=r['budget_currency'],transaction_date=entry['statistics_date'],
                           transaction_type='income') for r in selected]
-        projected = dict(entry,budget_system_id=system_id,budget_system_name=selected[0]['budget_name'],
-                         budget_mixed=False,allocation_basis=True,income_allocations=selected)
+        projected_ids = sorted({r['budget_system_id'] for r in selected})
+        projected = dict(
+            entry,
+            budget_system_id=projected_ids[0] if len(projected_ids) == 1 else None,
+            budget_system_ids=projected_ids,
+            budget_system_name='、'.join(dict.fromkeys(r['budget_name'] for r in selected)),
+            budget_mixed=False,
+            allocation_basis=True,
+            income_allocations=selected,
+        )
         projected['_valuations'] = {code:value_entry(dict(kind='income',members=synthetic),rates,code)
                                     for code in ('CNY','HKD')}
         invalid = next((r for r in selected if not r['source_complete']),None)
