@@ -92,7 +92,7 @@ window.TermDeposits = (() => {
     accounts = await request('/api/accounts?include_inactive=true');
     ensureEditor(); form.replaceChildren(); record = deposit; callback = onSaved;
     editorHeading(deposit ? '修改定期存款' : '存入定期');
-    const hint = node('p', '保存后从来源账户扣出本金，转入定存资产。补录历史定存时，请先确认这笔本金没有另记过转账。', 'subtle-note');
+    const hint = node('p', '保存后从来源账户扣出本金，转入同币种公共定存账户。每笔仍保留银行来源；补录历史定存时，请先确认本金没有另记过转账。', 'subtle-note');
     form.append(hint);
     const grid = node('div', '', 'form-grid');
     const source = accountSelect('term-source', deposit?.source_account_id);
@@ -158,6 +158,7 @@ window.TermDeposits = (() => {
     for (const deposit of deposits) {
       const row = node('tr'); row.dataset.depositId = deposit.id;
       const name = node('td'); name.append(node('strong',deposit.name),node('small',deposit.source_account_name,'term-secondary'));
+      name.append(node('small',`归集：${deposit.term_account_name}`,'term-secondary'));
       const days = deposit.status === 'settled' ? `到账 ${deposit.settlement_date}`
         : deposit.days_remaining < 0 ? `已过 ${-deposit.days_remaining} 天` : deposit.days_remaining === 0 ? '今天到期' : `还有 ${deposit.days_remaining} 天`;
       const dateCell = node('td'); dateCell.append(node('span',deposit.maturity_date),node('small',days,'term-secondary'));

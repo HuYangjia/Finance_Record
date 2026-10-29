@@ -47,6 +47,7 @@ ACCOUNT_DIRECTORY_SEED = (
     ("domestic_bank", "国内银行账户", 10),
     ("overseas_bank", "香港及境外银行账户", 20),
     ("investment", "投资账户", 30),
+    ("term_deposit", "定期存款", 35),
     ("cash_wallet", "现金与电子钱包", 40),
     ("stored_value", "交通与储值账户", 50),
     ("liability", "负债账户", 60),
@@ -63,9 +64,16 @@ def connect() -> sqlite3.Connection:
 
 
 def initialize_database() -> None:
+    shared_term_backup = None
     if DATABASE_PATH.exists():
         with sqlite3.connect(DATABASE_PATH) as existing:
             tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if ('term_deposit_accounts' in tables and 'app_settings' in tables
+                    and not existing.execute("SELECT 1 FROM app_settings WHERE key='shared_term_deposit_version'").fetchone()):
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                shared_term_backup = BACKUP_DIR / f"finance-pre-shared-term-deposits-{datetime.now():%Y%m%d-%H%M%S-%f}.db"
+                with sqlite3.connect(shared_term_backup) as destination:
+                    existing.backup(destination)
             if 'accounts' in tables and 'term_deposits' not in tables:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
                 with sqlite3.connect(BACKUP_DIR / f"finance-pre-term-deposits-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
@@ -220,6 +228,9 @@ def initialize_database() -> None:
         initialize_entry_shortcuts(connection)
         from app.budget_migrations import migrate_income_allocations
         migrate_income_allocations(connection)
+
+    from app.term_migrations import migrate_shared_term_accounts
+    migrate_shared_term_accounts(shared_term_backup)
 
 
 def migrate_account_directories(connection: sqlite3.Connection) -> None:

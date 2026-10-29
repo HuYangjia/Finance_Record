@@ -105,23 +105,25 @@ def validate_write(c, payload, previous=None):
 
 
 def term_account(c, account, start):
-    linked = c.execute('SELECT term_account_id FROM term_deposit_accounts WHERE source_account_id=?',
-                       (account['id'],)).fetchone()
+    linked = c.execute('SELECT term_account_id FROM term_deposit_pools WHERE currency_code=?',
+                       (account['currency_code'],)).fetchone()
     if linked:
         account_id = linked['term_account_id']
         c.execute('''UPDATE accounts SET opening_balance_date=MIN(opening_balance_date,?),
                      is_active=1,updated_at=CURRENT_TIMESTAMP WHERE id=?''', (start, account_id))
-        return account_id
-    # IDs determine identity; names and bank labels are only presentation.
-    code = f'TERM-{account["id"]}'
-    while c.execute('SELECT 1 FROM accounts WHERE code=?', (code,)).fetchone():
-        code += '-D'
-    account_id = c.execute('''INSERT INTO accounts(code,name,account_class,account_type,
-        currency_code,institution,directory_key,opening_balance_date,note)
-        VALUES (?,?,'asset','bank_term',?,?,?,?,'由定期存款页面维护')''',
-        (code, f'{account["name"]} · 定存', account['currency_code'], account['institution'],
-         account['directory_key'], start)).lastrowid
-    c.execute('INSERT INTO term_deposit_accounts VALUES (?,?)', (account['id'], account_id))
+    else:
+        code = f'TERM-{account["currency_code"]}'
+        while c.execute('SELECT 1 FROM accounts WHERE code=?', (code,)).fetchone():
+            code += '-D'
+        currency_name = c.execute('SELECT name FROM currencies WHERE code=?', (account['currency_code'],)).fetchone()[0]
+        account_id = c.execute('''INSERT INTO accounts(code,name,account_class,account_type,
+            currency_code,institution,directory_key,opening_balance_date,note)
+            VALUES (?,?,'asset','bank_term',?,'定期存款','term_deposit',?,
+                    '各银行同币种定存统一归集，由定期存款页面维护')''',
+            (code, f'定期存款（{currency_name}）', account['currency_code'], start)).lastrowid
+        c.execute('INSERT INTO term_deposit_pools VALUES (?,?)', (account['currency_code'], account_id))
+    c.execute('''INSERT INTO term_deposit_accounts VALUES (?,?) ON CONFLICT(source_account_id)
+                 DO UPDATE SET term_account_id=excluded.term_account_id''', (account['id'], account_id))
     return account_id
 
 
@@ -165,7 +167,7 @@ def guard_transaction(c, transaction_id):
 
 
 def guard_account(c, account_id):
-    if c.execute('SELECT 1 FROM term_deposit_accounts WHERE term_account_id=?', (account_id,)).fetchone():
+    if c.execute("SELECT 1 FROM accounts WHERE id=? AND account_type='bank_term'", (account_id,)).fetchone():
         raise HTTPException(409, '定存汇总账户由“定期存款”页面维护，请从该页面操作。')
 
 
@@ -173,11 +175,12 @@ def rows(c, as_of=None):
     as_of = as_of or today()
     data = []
     for row in c.execute('''SELECT d.*,a.name AS source_account_name,a.institution,
-        a.currency_code,cur.decimal_places,m.term_account_id,
+        a.currency_code,cur.decimal_places,m.term_account_id,pool.name AS term_account_name,
         ret.destination_account_id, dest.name AS destination_account_name
         FROM term_deposits d JOIN accounts a ON a.id=d.source_account_id
         JOIN currencies cur ON cur.code=a.currency_code
         JOIN term_deposit_accounts m ON m.source_account_id=a.id
+        JOIN accounts pool ON pool.id=m.term_account_id
         LEFT JOIN transactions ret ON ret.id=d.return_transaction_id
         LEFT JOIN accounts dest ON dest.id=ret.destination_account_id'''):
         record = dict(row)

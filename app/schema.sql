@@ -352,6 +352,11 @@ CREATE INDEX IF NOT EXISTS transaction_entry_shortcuts_order_index
 
 CREATE TABLE IF NOT EXISTS term_deposit_accounts (
     source_account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE RESTRICT,
+    term_account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS term_deposit_pools (
+    currency_code TEXT PRIMARY KEY REFERENCES currencies(code) ON DELETE RESTRICT,
     term_account_id INTEGER NOT NULL UNIQUE REFERENCES accounts(id) ON DELETE RESTRICT
 );
 

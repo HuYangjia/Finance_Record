@@ -38,6 +38,7 @@ const base = 'http://127.0.0.1:18110';
     await text('#term-summary','1000.00 HKD');
     await page.screenshot({path:'/tmp/finance-term-deposits-desktop.png',fullPage:true});
     const row=()=>page.locator(`#term-deposit-body tr[data-deposit-id="${deposit.id}"]`);
+    assert((await row().textContent()).includes('归集：定期存款（港币）'));
     await row().getByRole('button',{name:'修改',exact:true}).click();
     await page.fill('#term-value','2');await page.fill('#term-note','预留学费');
     await text('#term-preview','到期日 2026-12-01');

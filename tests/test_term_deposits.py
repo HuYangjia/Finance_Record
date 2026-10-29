@@ -1,6 +1,7 @@
 from datetime import date
 from io import BytesIO
 from unittest.mock import patch
+import sqlite3
 import unittest
 
 from openpyxl import load_workbook
@@ -181,3 +182,109 @@ class TermDepositTest(unittest.TestCase):
         self.assertEqual(len(list(database.BACKUP_DIR.glob('finance-pre-term-deposits-*.db'))),1)
         self.assertEqual(self.balances()[self.account],'10000.00')
         self.assertEqual(self.call('GET','/api/term-deposits')['deposits'],[])
+
+    def test_public_pool_is_shared_between_banks_and_separates_currencies(self):
+        first=self.create()
+        other=self.create(name='第二家银行',source_account_id=self.other_account,principal='200')
+        self.assertEqual(first['term_account_id'],other['term_account_id'])
+        self.assertEqual(first['term_account_name'],'定期存款（港币）')
+        self.assertEqual(self.balances()[first['term_account_id']],'1200.00')
+        self.assertEqual(self.balances()[self.other_account],'-200.00')
+        with database.connect() as c:
+            usd=c.execute("INSERT INTO accounts(code,name,account_class,account_type,currency_code,opening_balance_date) VALUES ('USD','美元','asset','bank_demand','USD','2024-01-01')").lastrowid
+        dollar=self.create(name='美元定存',source_account_id=usd,principal='300')
+        self.assertNotEqual(dollar['term_account_id'],first['term_account_id'])
+        self.assertEqual(dollar['term_account_name'],'定期存款（美元）')
+        with database.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM term_deposit_pools').fetchone()[0],2)
+        self.settle(other,actual_interest='0')
+        self.assertEqual(self.balances()[first['term_account_id']],'1000.00')
+        self.call('PUT',f'/api/term-deposits/{first["id"]}',{
+            **self.body,'source_account_id':self.other_account,'expected_version':1})
+        self.assertEqual(self.balances()[first['term_account_id']],'1000.00')
+        self.assertEqual(self.call('GET','/api/term-deposits?source_account_id='+str(self.other_account))['total'],1)
+
+    def legacy_bank_accounts(self):
+        """Build the previously released one-bank/one-account schema in this fixture."""
+        first=self.create()
+        second=self.create(name='旧银行第二笔',source_account_id=self.other_account,principal='200')
+        settled=self.settle(second)
+        c=database.connect()
+        try:
+            c.execute('PRAGMA foreign_keys=OFF')
+            c.execute('BEGIN IMMEDIATE')
+            separate=c.execute("""INSERT INTO accounts(code,name,account_class,account_type,currency_code,
+                opening_balance_date) VALUES ('TERM-LEGACY-B','第二家银行旧定存','asset','bank_term','HKD','2026-10-01')""").lastrowid
+            c.execute('UPDATE transactions SET destination_account_id=? WHERE id=?',(separate,second['opening_transaction_id']))
+            c.execute('UPDATE transactions SET source_account_id=? WHERE id=?',(separate,settled['return_transaction_id']))
+            c.execute('UPDATE term_deposit_accounts SET term_account_id=? WHERE source_account_id=?',(separate,self.other_account))
+            c.execute('''CREATE TABLE term_deposit_accounts_legacy (
+                source_account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE RESTRICT,
+                term_account_id INTEGER NOT NULL UNIQUE REFERENCES accounts(id) ON DELETE RESTRICT)''')
+            c.execute('INSERT INTO term_deposit_accounts_legacy SELECT * FROM term_deposit_accounts')
+            c.execute('DROP TABLE term_deposit_accounts')
+            c.execute('ALTER TABLE term_deposit_accounts_legacy RENAME TO term_deposit_accounts')
+            c.execute('DROP TABLE term_deposit_pools')
+            c.execute("DELETE FROM app_settings WHERE key='shared_term_deposit_version'")
+            c.commit()
+            c.execute('PRAGMA foreign_keys=ON')
+        finally:
+            c.close()
+        return first,settled,separate
+
+    def test_legacy_banks_merge_preserves_contracts_interest_and_history_then_restarts_idempotently(self):
+        from app.term_migrations import ledger_signature,unique_target
+        first,settled,separate=self.legacy_bank_accounts()
+        with database.connect() as c:
+            original=ledger_signature(c)
+            old_contracts=[dict(r) for r in c.execute('SELECT * FROM term_deposits ORDER BY id')]
+            self.assertTrue(unique_target(c))
+        database.initialize_database()
+        backups=list(database.BACKUP_DIR.glob('finance-pre-shared-term-deposits-*.db'))
+        self.assertEqual(len(backups),1)
+        with sqlite3.connect(backups[0]) as c:
+            self.assertEqual(c.execute('SELECT term_account_id FROM term_deposit_accounts WHERE source_account_id=?',
+                                      (self.other_account,)).fetchone()[0],separate)
+        with database.connect() as c:
+            self.assertEqual(ledger_signature(c),original)
+            self.assertFalse(unique_target(c))
+            self.assertFalse(c.execute('PRAGMA foreign_key_check').fetchall())
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM term_deposit_pools').fetchone()[0],1)
+            archive=c.execute('SELECT is_active FROM accounts WHERE id=?',(separate,)).fetchone()
+            self.assertEqual(archive['is_active'],0)
+            self.assertEqual(c.execute('SELECT balance_minor FROM account_balances WHERE id=?',(separate,)).fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT source_account_id FROM transactions WHERE id=?',
+                                      (settled['return_transaction_id'],)).fetchone()[0],first['term_account_id'])
+            for old in old_contracts:
+                new=dict(c.execute('SELECT * FROM term_deposits WHERE id=?',(old['id'],)).fetchone())
+                self.assertEqual(new['version'],old['version']+1)
+                for field,value in old.items():
+                    if field not in ('version','updated_at'):
+                        self.assertEqual(new[field],value,field)
+        data=self.call('GET','/api/term-deposits?status=all')
+        self.assertTrue(all(r['term_account_id']==first['term_account_id'] for r in data['deposits']))
+        self.assertEqual(next(r for r in data['deposits'] if r['id']==settled['id'])['actual_interest'],'2.34')
+        self.call('PUT',f'/api/term-deposits/{first["id"]}',{**self.body,'expected_version':1},409)
+        database.initialize_database()
+        self.assertEqual(len(list(database.BACKUP_DIR.glob('finance-pre-shared-term-deposits-*.db'))),1)
+        self.assertEqual(data,self.call('GET','/api/term-deposits?status=all'))
+        self.create(source_account_id=self.other_account,principal='50')
+        self.assertEqual(self.balances()[first['term_account_id']],'1050.00')
+
+    def test_unknown_legacy_money_stops_migration_without_partial_rewrite(self):
+        from app.term_migrations import ledger_signature,unique_target
+        first,_,_=self.legacy_bank_accounts()
+        with database.connect() as c:
+            c.execute("""INSERT INTO transactions(transaction_date,transaction_type,destination_account_id,inflow_minor)
+                         VALUES ('2026-10-01','adjustment',?,100)""",(first['term_account_id'],))
+            original=ledger_signature(c)
+            mapping=[tuple(r) for r in c.execute('SELECT * FROM term_deposit_accounts ORDER BY source_account_id')]
+        with self.assertRaisesRegex(RuntimeError,'合同以外'):
+            database.initialize_database()
+        with database.connect() as c:
+            self.assertEqual(ledger_signature(c),original)
+            self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM term_deposit_accounts ORDER BY source_account_id')],mapping)
+            self.assertTrue(unique_target(c))
+            self.assertFalse(c.execute('SELECT 1 FROM term_deposit_pools').fetchone())
+            self.assertFalse(c.execute("SELECT 1 FROM app_settings WHERE key='shared_term_deposit_version'").fetchone())
+            self.assertFalse(c.execute('PRAGMA foreign_key_check').fetchall())
