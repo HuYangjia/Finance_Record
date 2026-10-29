@@ -415,11 +415,12 @@ function resetTransactionForm({ preserveExpenseAccount = false } = {}) {
 }
 
 async function loadFormOptions() {
-  const [accounts, expenseCategories, incomeCategories] = await Promise.all([
+  const [accountRows, expenseCategories, incomeCategories] = await Promise.all([
     request("/api/accounts"),
     request("/api/categories?kind=expense"),
     request("/api/categories?kind=income"),
   ]);
+  const accounts = accountRows.filter(account => account.account_type !== 'bank_term');
   state.accounts = accounts;
   state.expenseCategories = expenseCategories;
   state.incomeCategories = incomeCategories;
@@ -505,6 +506,13 @@ for (const button of document.querySelectorAll(".entry-mode")) {
     setMode(button.dataset.mode);
   });
 }
+
+document.querySelector('#open-term-deposit')?.addEventListener('click', async () => {
+  try {
+    await TermDeposits.open(null, result => setStatus(
+      `已存入定期 ${result.principal} ${result.currency_code} · ${result.source_account_name}余额 ${result.source_balance} ${result.currency_code} · 到期日 ${result.maturity_date}`, 'success'));
+  } catch (error) { setStatus(error.message, 'error'); }
+});
 
 transferSourceSelect.addEventListener("change", updateTransferAmounts);
 transferDestinationSelect.addEventListener("change", updateTransferAmounts);

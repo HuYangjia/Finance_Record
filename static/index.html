@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/static/styles.css?v=20261018-3">
     <link rel="stylesheet" href="/static/workspace.css?v=20261018-2">
     <link rel="stylesheet" href="/static/income-allocations.css?v=20261020-3">
+    <link rel="stylesheet" href="/static/term-deposits.css?v=20261029-1">
 </head>
   <body>
     <header class="topbar">
@@ -21,6 +22,7 @@
           <a class="nav-link" href="/overview">概况与查看</a>
           <a class="nav-link" href="/accounts">账户与流水</a>
           <a class="nav-link" href="/investments">投资与汇率</a>
+          <a class="nav-link" href="/term-deposits">定期存款</a>
           <a class="nav-link" href="/offsets">冲销与代收代付</a>
           <a class="nav-link" href="/budgets">预算计划</a>
           <a class="nav-link" href="/settings">设置</a>
@@ -48,6 +50,7 @@
           <button class="entry-mode is-active" type="button" data-mode="expense" aria-pressed="true">支出</button>
           <button class="entry-mode" type="button" data-mode="transfer" aria-pressed="false">转账 / 换汇</button>
           <button class="entry-mode" type="button" data-mode="income" aria-pressed="false">入账</button>
+          <button id="open-term-deposit" class="secondary-button" type="button">存入定期</button>
         </div>
         <div id="account-warning" class="empty-notice" hidden>
           尚未创建账户。请先直接在 SQLite 数据库的 <code>accounts</code> 表新增账户。
@@ -120,6 +123,7 @@
     <script src="/static/income-allocations.js?v=20261020-3"></script>
     <script src="/static/number-input.js?v=20261018-1"></script>
     <script src="/static/frequent-picker.js?v=20261018-3"></script>
-    <script src="/static/app.js?v=20261020-1"></script>
+    <script src="/static/app.js?v=20261029-1"></script>
+    <script src="/static/term-deposits.js?v=20261029-1"></script>
   </body>
 </html>

@@ -451,6 +451,10 @@ function buildSearchPath() {
 function createStatusBadges(record) {
   const target = document.createElement("div");
   target.className = "status-badges";
+  if (record.term_deposit_id) {
+    const link = document.createElement('a'); link.href = `/term-deposits?deposit=${record.term_deposit_id}`;
+    link.className = 'status-badge'; link.textContent = '定存记录'; target.append(link);
+  }
   if(['expense','income'].includes(record.transaction_type)&&!(record.transaction_type==='income'&&record.income_allocations?.length)){
     const badge=document.createElement('span');badge.className='status-badge budget-badge';badge.textContent=(record.effective_budget_system_name||record.budget_system_name||'未归属预算')+(record.budget_inherited?' · 自动':'');target.append(badge);
   }
@@ -538,6 +542,11 @@ function createActionButtons(record) {
 
 function renderAccountState(account) {
   state.detail.account = account;
+  for (const id of ['open-adjustment-dialog','open-opening-balance-dialog']) {
+    const button = document.getElementById(id);
+    button.disabled = account.account_type === 'bank_term';
+    button.title = button.disabled ? '请在定期存款页面维护本金及到账' : '';
+  }
   document.querySelector("#account-name").textContent = account.name;
   document.querySelector("#account-meta").textContent =
     `${account.code} · ${account.institution || "未填写机构"} · ${account.account_class_label} · ${account.currency_code}`;
@@ -1431,6 +1440,10 @@ function updateEditorFieldState() {
 
 async function openTransactionEditor(transactionId) {
   const transaction = await request(`/api/transactions/${transactionId}`);
+  if (transaction.term_deposit_id) {
+    window.location.href = `/term-deposits?deposit=${transaction.term_deposit_id}`;
+    return;
+  }
   editorForm.reset();
   setStatus(editorStatus, "");
   editorTransactionId.value = transaction.id;

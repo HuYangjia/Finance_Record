@@ -19,6 +19,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.database import ROOT_DIR, connect, create_backup, initialize_database
+from app.term_deposits import (
+    router as term_deposits_router,
+    guard_account as guard_term_account,
+    guard_transaction as guard_term_transaction,
+)
 from app.budgets import (
     router as budgets_router,
     require_system,
@@ -131,6 +136,7 @@ app.include_router(budgets_router)
 app.include_router(budget_storage_router)
 app.include_router(entry_shortcuts_router)
 app.include_router(income_allocations_router)
+app.include_router(term_deposits_router)
 
 
 @app.get("/offsets", include_in_schema=False)
@@ -449,6 +455,7 @@ def get_currency_decimal_places(connection, currency_code: str) -> int:
 
 
 def get_active_account(connection, account_id: int, field_label: str):
+    guard_term_account(connection, account_id)
     account = connection.execute(
         """
         SELECT accounts.id, accounts.name, accounts.currency_code, currencies.decimal_places
@@ -530,6 +537,7 @@ def get_transaction_account(
     field_label: str,
     allowed_inactive_ids: set[int] | None = None,
 ):
+    guard_term_account(connection, account_id)
     account = connection.execute(
         """
         SELECT
@@ -2177,6 +2185,7 @@ def create_balance_adjustment(
     adjustment_date = adjustment.adjustment_date.isoformat()
     backup_path = create_backup()
     with connect() as connection:
+        guard_term_account(connection, account_id)
         account = get_account_balance_row(connection, account_id)
         actual_balance_minor = amount_to_minor(
             adjustment.actual_balance,
@@ -2298,6 +2307,7 @@ def update_opening_balance(account_id: int, opening_balance: OpeningBalanceUpdat
     reason = clean_required_text(opening_balance.reason, "修正原因")
     backup_path = create_backup()
     with connect() as connection:
+        guard_term_account(connection, account_id)
         account = get_account_balance_row(connection, account_id)
         opening_balance_date = opening_balance.opening_balance_date.isoformat()
         earliest_activity = connection.execute(
@@ -3841,6 +3851,7 @@ def get_transaction(transaction_id: int):
 @app.put("/api/transactions/{transaction_id}")
 def update_transaction(transaction_id: int, transaction: TransactionUpdate):
     with connect() as connection:
+        guard_term_transaction(connection, transaction_id)
         original = fetch_transaction_snapshot(connection, transaction_id)
         investment_valuation_id = generated_investment_valuation_id(
             connection,
@@ -3860,6 +3871,7 @@ def update_transaction(transaction_id: int, transaction: TransactionUpdate):
         current = fetch_transaction_snapshot(connection, transaction_id)
         if current is None:
             raise HTTPException(status_code=404, detail="流水不存在。")
+        guard_term_transaction(connection, transaction_id)
         payload = normalize_transaction_update(connection, transaction, current)
         budget_id = transaction.budget_system_id if 'budget_system_id' in transaction.model_fields_set else current.get('budget_system_id')
         if payload['transaction_type'] not in ('income','expense'):
@@ -3914,6 +3926,7 @@ def update_transaction(transaction_id: int, transaction: TransactionUpdate):
 def delete_transaction(transaction_id: int, deletion: TransactionDelete):
     reason = clean_required_text(deletion.reason, "删除原因")
     with connect() as connection:
+        guard_term_transaction(connection, transaction_id)
         original = fetch_transaction_snapshot(connection, transaction_id)
         investment_valuation_id = generated_investment_valuation_id(
             connection,
@@ -3930,6 +3943,7 @@ def delete_transaction(transaction_id: int, deletion: TransactionDelete):
     backup_path = create_backup()
     with connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        guard_term_transaction(connection, transaction_id)
         group_id = group_for_transaction(connection, transaction_id)
         if group_id is not None:
             raise HTTPException(409, f"请先从冲销事项 #{group_id} 移除此流水，或解散事项。")
@@ -4429,6 +4443,9 @@ def build_excel_export(selected_month: str, basis: str = "raw") -> BytesIO:
             """
         ).fetchall()
 
+        from app.term_deposits import rows as term_deposit_rows
+        export_term_deposits = term_deposit_rows(connection, date.fromisoformat(dashboard_result['as_of_date']))
+
     workbook = Workbook()
     workbook.remove(workbook.active)
 
@@ -4730,6 +4747,22 @@ def build_excel_export(selected_month: str, basis: str = "raw") -> BytesIO:
     from app.offset_export import append_offset_sheets
     append_offset_sheets(workbook, export_entries, export_rates, budget_rows, currency_places,
                          selected_month, dashboard_result["as_of_date"], basis)
+    deposits_sheet = workbook.create_sheet('定期存款')
+    sheet_title(deposits_sheet, f'定期存款 · 截至 {dashboard_result["as_of_date"]}', 12)
+    sheet_headers(deposits_sheet, ['名称','来源账户','币种','本金','存入日期','到期日','年利率（%）',
+                                 '预期利息','状态','到账日期','实际利息','备注'])
+    status_labels = {'active':'存续中','soon':'30天内到期','due':'到期待到账','settled':'已到账'}
+    for deposit in export_term_deposits:
+        settled = deposit['status'] == 'settled'
+        deposits_sheet.append([deposit['name'],deposit['source_account_name'],deposit['currency_code'],
+            Decimal(deposit['principal']),deposit['start_date'],deposit['maturity_date'],
+            Decimal(deposit['annual_rate']),Decimal(deposit['expected_interest']),status_labels[deposit['status']],
+            deposit['settlement_date'] if settled else '',
+            Decimal(deposit['actual_interest']) if settled else None,deposit['note']])
+        for cell in deposits_sheet[deposits_sheet.max_row]:
+            if isinstance(cell.value, str):
+                cell.data_type = 's'
+    autosize_columns(deposits_sheet)
     output = BytesIO()
     workbook.save(output)
     output.seek(0)

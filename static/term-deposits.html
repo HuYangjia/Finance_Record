@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>个人财务账本 - 定期存款</title>
+    <link rel="icon" href="/static/compass-rose.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/styles.css?v=20261029-1">
+    <link rel="stylesheet" href="/static/workspace.css?v=20261018-2">
+    <link rel="stylesheet" href="/static/term-deposits.css?v=20261029-1">
+  </head>
+  <body>
+    <header class="topbar"><div class="topbar-inner">
+      <div class="brand"><h1>个人财务账本</h1><p>本地数据库记账</p></div>
+      <nav class="primary-nav" aria-label="主导航">
+        <a class="nav-link" href="/">记账</a><a class="nav-link" href="/overview">概况与查看</a>
+        <a class="nav-link" href="/accounts">账户与流水</a><a class="nav-link" href="/investments">投资与汇率</a>
+        <a class="nav-link is-active" href="/term-deposits" aria-current="page">定期存款</a>
+        <a class="nav-link" href="/offsets">冲销与代收代付</a><a class="nav-link" href="/budgets">预算计划</a><a class="nav-link" href="/settings">设置</a>
+      </nav>
+    </div></header>
+    <main class="term-main">
+      <section class="entry-panel term-heading">
+        <div><h2>定期存款</h2><p class="subtle-note">把暂时用不到的钱安放好，也看清何时能用回来。</p></div>
+        <button id="new-term-deposit" type="button">＋ 存入定期</button>
+        <p id="term-page-status" role="status" class="full-width"></p>
+      </section>
+      <section id="term-summary" class="term-summary" aria-label="全部存续定存，分币种汇总"></section>
+      <section class="ledger-panel">
+        <form id="term-filters" class="detail-filter-grid" onsubmit="return false">
+          <label><span>扣款账户 / 银行</span><select id="term-source-filter"></select></label>
+          <label><span>币种</span><select id="term-currency-filter"></select></label>
+          <label><span>状态</span><select id="term-status-filter">
+            <option value="open">全部存续（含待到账）</option><option value="soon">30 天内到期</option>
+            <option value="due">已到期待到账</option><option value="settled">已到账</option><option value="all">全部记录</option>
+          </select></label>
+        </form>
+        <p id="term-filter-count" class="subtle-note"></p>
+        <div class="table-wrap"><table id="term-deposit-table">
+          <thead><tr><th>定存 / 来源</th><th>本金</th><th>存入日期</th><th>期限</th><th>到期日</th>
+            <th>预期年利率</th><th>预期利息</th><th>实际利息</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="term-deposit-body"></tbody>
+        </table></div>
+        <p class="subtle-note">顶部为全部存续定存汇总；表格按所选条件筛选。到期后确认实际到账，本金回流、利息另记收入。预期利息尚未计入资产或预算。</p>
+      </section>
+    </main>
+    <script src="/static/budget-ui.js?v=20261001-2"></script>
+    <script src="/static/number-input.js?v=20261018-1"></script>
+    <script src="/static/term-deposits.js?v=20261029-1"></script>
+  </body>
+</html>

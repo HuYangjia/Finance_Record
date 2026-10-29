@@ -261,7 +261,7 @@ def annotate_transactions(records):
     if not records:
         return records
     ids=list(dict.fromkeys(r['id'] for r in records))
-    budgets,links={},{}
+    budgets,links,term_links={},{},{}
     with connect() as connection:
         connection.execute('BEGIN')
         daily = daily_expense_system(connection)
@@ -269,6 +269,12 @@ def annotate_transactions(records):
         allocations, _ = allocations_for_transactions(connection,ids)
         for start in range(0,len(ids),500):
             batch=ids[start:start+500];placeholders=','.join('?' for _ in batch)
+            for row in connection.execute(f'''SELECT id,opening_transaction_id,return_transaction_id,interest_transaction_id
+                    FROM term_deposits WHERE opening_transaction_id IN ({placeholders})
+                    OR return_transaction_id IN ({placeholders}) OR interest_transaction_id IN ({placeholders})''',batch*3):
+                for key in ('opening_transaction_id','return_transaction_id','interest_transaction_id'):
+                    if row[key] is not None:
+                        term_links[row[key]] = row['id']
             budgets.update({r['id']:dict(r) for r in connection.execute(f'''SELECT t.id,t.budget_system_id,b.name AS budget_system_name
                 FROM transactions t LEFT JOIN budget_systems b ON b.id=t.budget_system_id WHERE t.id IN ({placeholders})''',batch)})
             links.update({row['transaction_id']:dict(row) for row in connection.execute(f'''
@@ -277,6 +283,7 @@ def annotate_transactions(records):
                 JOIN transaction_offset_groups g ON g.id=m.group_id WHERE m.transaction_id IN ({placeholders})
             ''',batch)})
     for record in records:
+        record['term_deposit_id'] = term_links.get(record['id'])
         record['income_allocations'] = allocations.get(record['id'],[])
         record.update({k: budgets.get(record['id'],{}).get(k) for k in ('budget_system_id','budget_system_name')})
         effective_budget(record,daily)

@@ -168,7 +168,8 @@ CREATE TABLE IF NOT EXISTS change_audit_logs (
             'exchange_rate',
             'offset_group',
             'budget',
-            'entry_shortcut'
+            'entry_shortcut',
+            'term_deposit'
         )
     ),
     entity_id INTEGER,
@@ -348,6 +349,41 @@ CREATE TABLE IF NOT EXISTS transaction_entry_shortcuts (
 
 CREATE INDEX IF NOT EXISTS transaction_entry_shortcuts_order_index
     ON transaction_entry_shortcuts(is_active DESC, sort_order, id);
+
+CREATE TABLE IF NOT EXISTS term_deposit_accounts (
+    source_account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE RESTRICT,
+    term_account_id INTEGER NOT NULL UNIQUE REFERENCES accounts(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS term_deposits (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    source_account_id INTEGER NOT NULL REFERENCES term_deposit_accounts(source_account_id) ON DELETE RESTRICT,
+    principal_minor INTEGER NOT NULL CHECK (principal_minor > 0),
+    start_date TEXT NOT NULL,
+    term_value INTEGER NOT NULL CHECK (term_value > 0),
+    term_unit TEXT NOT NULL CHECK (term_unit IN ('day', 'month')),
+    annual_rate TEXT NOT NULL,
+    day_basis INTEGER NOT NULL CHECK (day_basis IN (360, 365)),
+    maturity_override TEXT,
+    opening_transaction_id INTEGER NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE RESTRICT,
+    settlement_date TEXT,
+    return_transaction_id INTEGER UNIQUE REFERENCES transactions(id) ON DELETE RESTRICT,
+    interest_transaction_id INTEGER UNIQUE REFERENCES transactions(id) ON DELETE RESTRICT,
+    actual_interest_minor INTEGER CHECK (actual_interest_minor >= 0),
+    note TEXT,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK ((settlement_date IS NULL AND return_transaction_id IS NULL
+            AND interest_transaction_id IS NULL AND actual_interest_minor IS NULL)
+        OR (settlement_date IS NOT NULL AND return_transaction_id IS NOT NULL
+            AND actual_interest_minor IS NOT NULL
+            AND ((actual_interest_minor=0 AND interest_transaction_id IS NULL)
+                 OR (actual_interest_minor>0 AND interest_transaction_id IS NOT NULL))))
+);
+
+CREATE INDEX IF NOT EXISTS term_deposits_source_index ON term_deposits(source_account_id);
 
 CREATE TRIGGER IF NOT EXISTS validate_transaction_category_before_insert
 BEFORE INSERT ON transactions

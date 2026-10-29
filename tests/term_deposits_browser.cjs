@@ -1,0 +1,70 @@
+// Desktop flow; refuses to touch a production ledger.
+const {chromium,request} = require('playwright');
+const assert = require('node:assert/strict');
+const base = 'http://127.0.0.1:18110';
+(async () => {
+  const api = await request.newContext({baseURL:base});
+  const get = async path => {const result=await api.get(path);assert(result.ok(),await result.text());return result.json();};
+  assert.deepEqual(await get('/__budget_test_fixture'),{fixture:'budget-browser',temporary:true});
+  const accounts = await get('/api/accounts');
+  const account = accounts.find(a=>a.code==='ZABANK-HKD');
+  const originalBalances = Object.fromEntries(accounts.map(a=>[a.id,a.balance]));
+  const browser = await chromium.launch({headless:true});
+  const page = await browser.newPage({viewport:{width:1600,height:1050},timezoneId:'Asia/Shanghai'});
+  page.setDefaultTimeout(15000);
+  const errors=[];page.on('pageerror',error=>errors.push(error.message));page.on('dialog',dialog=>dialog.accept());
+  const text = (selector,value)=>page.waitForFunction(([s,v])=>document.querySelector(s)?.textContent.includes(v),[selector,value]);
+  try {
+    await page.goto(base+'/');
+    await page.waitForFunction(()=>!document.querySelector('#expense-budget-system').disabled);
+    await page.fill('#expense-amount','19.88');
+    await page.click('#open-term-deposit');await page.waitForSelector('#term-deposit-editor[open]');
+    await page.selectOption('#term-source',String(account.id));
+    await page.fill('#term-name','桌面定存');await page.fill('#term-principal','1000');
+    await page.fill('#term-start','2026-10-01');await page.fill('#term-value','1');await page.fill('#term-rate','3.5');
+    await text('#term-preview','到期日 2026-11-01');await text('#term-preview','2.97 HKD');
+    await page.locator('#term-deposit-form button[type=submit]').click();
+    await page.waitForSelector('#term-deposit-editor[open]',{state:'hidden'});
+    await text('#form-status','已存入定期 1000.00 HKD');
+    assert.equal(await page.locator('#expense-amount').inputValue(),'19.88');
+    let data = await get('/api/term-deposits');let deposit=data.deposits.find(d=>d.name==='桌面定存');
+    assert(deposit);assert.equal(data.summary[0].principal,'1000.00');
+    const recorded=(await get('/api/accounts')).find(a=>a.id===account.id);
+    assert.equal(Number(recorded.balance),Number(originalBalances[account.id])-1000);
+    // Existing entry controls never offer a managed term account.
+    await page.reload();await page.waitForFunction(()=>document.querySelector('#source-account').options.length>1);
+    assert.equal(await page.locator(`#source-account option[value="${deposit.term_account_id}"]`).count(),0);
+    await page.goto(base+'/term-deposits');await text('#term-deposit-body','桌面定存');
+    await text('#term-summary','1000.00 HKD');
+    await page.screenshot({path:'/tmp/finance-term-deposits-desktop.png',fullPage:true});
+    const row=()=>page.locator(`#term-deposit-body tr[data-deposit-id="${deposit.id}"]`);
+    await row().getByRole('button',{name:'修改',exact:true}).click();
+    await page.fill('#term-value','2');await page.fill('#term-note','预留学费');
+    await text('#term-preview','到期日 2026-12-01');
+    await page.screenshot({path:'/tmp/finance-term-editor-desktop.png',fullPage:true});
+    await page.locator('#term-deposit-form button[type=submit]').click();
+    await page.waitForSelector('#term-deposit-editor[open]',{state:'hidden'});
+    await text('#term-deposit-body','2026-12-01');await text('#term-deposit-body','预留学费');
+    await page.selectOption('#term-status-filter','soon');await text('#term-filter-count','显示 0 笔');
+    await page.selectOption('#term-status-filter','open');await text('#term-filter-count','显示 1 笔');
+    await row().getByRole('button',{name:'确认到账',exact:true}).click();
+    await page.fill('#term-settle-date','2026-10-29');await page.fill('#term-interest','2.34');
+    await page.locator('#term-deposit-form button[type=submit]').click();
+    await page.waitForSelector('#term-deposit-editor[open]',{state:'hidden'});
+    await text('#term-filter-count','显示 0 笔');
+    await page.selectOption('#term-status-filter','settled');await text('#term-deposit-body','2.34 HKD');
+    data=await get('/api/term-deposits?status=all');deposit=data.deposits.find(d=>d.id===deposit.id);
+    assert.equal(deposit.status,'settled');assert.equal(data.summary[0].principal,'0.00');
+    await row().getByRole('button',{name:'撤销到账',exact:true}).click();await text('#term-filter-count','显示 0 笔');
+    await page.selectOption('#term-status-filter','open');await text('#term-deposit-body','桌面定存');
+    await row().getByRole('button',{name:'删除',exact:true}).click();await text('#term-filter-count','显示 0 笔');
+    const final=await get('/api/accounts');
+    for(const [id,balance] of Object.entries(originalBalances))assert.equal(final.find(a=>a.id===Number(id)).balance,balance);
+    assert.deepEqual(errors,[]);
+    console.log('PASS desktop deposit entry, preserved draft, preview, table/filter, correction, early settlement, reopen and delete; original account balances restored');
+  } catch (error) {
+    await page.screenshot({path:'/tmp/finance-term-failure.png',fullPage:true});
+    console.error('Page diagnostics:',await page.locator('#form-status,#term-editor-status,#term-preview,#term-page-status').allTextContents(),errors);
+    throw error;
+  } finally {await browser.close();await api.dispose();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

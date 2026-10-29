@@ -201,6 +201,12 @@ Excel 导出至少包含：月度总览、账户余额、交易流水、月度�
 
 `transaction_offset_groups` 保存事项归属缓存与版本，`transaction_offset_members` 保存唯一流水关联。日期取全部成员最早日期，分类继承最早主流水；读取以实际成员为准，关联及原流水写入同步缓存。`app/offsets.py` 负责事项接口、事务校验与审计，`app/personal_cashflow.py` 生成个人收支结果，`app/reporting.py` 共享换算及每日统计，`app/offset_export.py` 将相同结果写入 Excel。
 
+## 定期存款
+
+`/term-deposits` 统一维护不同银行和币种的真实定存；首页“存入定期”打开同一记账弹窗。`app/term_deposits.py` 维护合同、预览、存入、编辑、确认到账、撤销到账与删除。`term_deposit_accounts` 按来源账户关联一个 `bank_term` 汇总账户，`term_deposits` 保存期限、预期利率、计息基准、版本及真实流水引用。存入及本金回流为普通内部转账，只有实际到账利息计收入；定存资产参与净资产、不计可用现金、不参与投资估值，预期利息不入账。
+
+全部写操作同事务处理合同与流水，并备份、审计和校验版本。受管账户和关联流水从定存页维护，账户页提供定存跳转；原始查询与余额继续使用统一流水。Excel 附加按报告截止日显示的“定期存款”表。升级备份 `finance-pre-term-deposits-*.db`，保留所有历史金额；预算存储“定期”仍单独表示用途额度。详见 [term-deposits-design.md](term-deposits-design.md)。
+
 ## 第六页：预算计划与设置
 
 2026-10-20：预算改为由收入分配形成额度。`budget_income_allocations` 关联普通收入或收入事项与月计划，保存目标预算币种金额及来源计价币种；一收入多预算、多收入同预算均可。`budget_plans.funding_mode=income` 时总额是分配合计的只读缓存，与分配、版本、审计在同一写事务更新；`legacy` 仅保留历史手填及旧客户端兼容。下面的手填总额和单来源绑定描述属于历史实现，以本段及预算设计最新规则为准。

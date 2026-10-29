@@ -66,6 +66,10 @@ def initialize_database() -> None:
     if DATABASE_PATH.exists():
         with sqlite3.connect(DATABASE_PATH) as existing:
             tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if 'accounts' in tables and 'term_deposits' not in tables:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-term-deposits-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
             if 'budget_plans' in tables and 'budget_legacy_reviews' not in tables:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
                 with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-review-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
@@ -283,6 +287,7 @@ def migrate_change_audit_logs(connection: sqlite3.Connection) -> None:
             and "offset_group" in current_sql
             and "'budget'" in current_sql
             and "entry_shortcut" in current_sql
+            and "term_deposit" in current_sql
         )
     ):
         return
@@ -303,7 +308,8 @@ def migrate_change_audit_logs(connection: sqlite3.Connection) -> None:
                     'exchange_rate',
                     'offset_group',
                     'budget',
-                    'entry_shortcut'
+                    'entry_shortcut',
+                    'term_deposit'
                 )
             ),
             entity_id INTEGER,
