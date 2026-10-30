@@ -56,10 +56,34 @@
   function fundingLabel(source,code){
     const host=node('div','','plan-funding-label');
     if(!source){host.append(node('span','未绑定来源','subtle-note'));return host;}
-    const link=node('a',source.title);link.href=source.url;link.target='_blank';link.rel='noopener';host.append(link);
+    const link=button(source.title,()=>openSource(source,link),'budget-source-link');
+    link.dataset.sourceKey=`${source.entry_type}:${source.entry_id}`;host.append(link);
     if(source.allocated_to_plan!=null)host.append(node('small',`本预算分配 ${source.allocated_to_plan} ${code||''}`,'subtle-note'));
     host.append(node('small',`来源发生／统计日 ${source.date||'待核对'}；额度计入当前预案月份`,'subtle-note'));
     host.append(node('small',source.status,source.reason||source.overallocated?'funding-warning':'subtle-note'));return host;
+  }
+  async function openSource(source,opener){
+    const editor=$('plan-editor'),insideEditor=editor.contains(opener);
+    const system=opener.closest('tr[data-system-id]')?.dataset.systemId;
+    const position={x:window.scrollX,y:window.scrollY};
+    const scrolls=[...document.querySelectorAll('.table-wrap,.plan-editor-scroll')].map(el=>({el,top:el.scrollTop,left:el.scrollLeft}));
+    const restore=()=>{
+      for(const s of scrolls)if(s.el.isConnected){s.el.scrollTop=s.top;s.el.scrollLeft=s.left;}
+      window.scrollTo(position.x,position.y);
+    };
+    const returnFocus=()=>{
+      const host=insideEditor?editor:system?$('month-plans').querySelector(`tr[data-system-id="${system}"]`):$('month-plans');
+      const target=opener.isConnected?opener:[...host?.querySelectorAll('[data-source-key]')||[]].find(el=>el.dataset.sourceKey===opener.dataset.sourceKey);
+      target?.focus({preventScroll:true});restore();requestAnimationFrame(restore);
+    };
+    try{
+      await BudgetSource.open(source,async()=>{
+        config=await request('/api/budget/config');await reload(false);
+        if(editor.open&&identity&&!dirty)await openEditor({...identity},chooseIdentity);
+        restore();
+      },returnFocus);
+      restore();
+    }catch(error){status(error.message,true);returnFocus();}
   }
   function executionTable(rows,history=false){
     const table=node('table'),head=node('thead'),tr=node('tr');
