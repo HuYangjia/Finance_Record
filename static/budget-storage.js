@@ -99,7 +99,7 @@ window.BudgetStorage = (() => {
     }
     const table=node('table'),head=node('tr');for(const label of ['日期','消费 / 事项','净消费','扣款存储','操作'])head.append(node('th',label));table.append(head);
     for(const row of data.row.expenses){
-      const tr=node('tr');tr.dataset.entryKey=`${row.entry_type}:${row.entry_id}`;const source=node('td'),link=node('a',row.title);link.href=row.url;link.target='_blank';link.rel='noopener';source.append(link);
+      const tr=node('tr');tr.dataset.entryKey=`${row.entry_type}:${row.entry_id}`;const source=node('td'),link=node('a',row.title);link.href=row.url;link.target='_blank';link.rel='noopener';source.append(link);if(row.net_income_deficit)source.append(node('small',' · 收入事项净亏损'));
       const automatic=row.automatic?`自动：待分配 → ${data.row.automatic_cash_storage_id?'活期':'待归属消费'}`:'';
       const name=data.config.storage.find(s=>s.id===row.storage_method_id)?.path||automatic||'待归属消费';
       const rule=row.automatic?' · 自动':row.inherited?' · 默认':' · 单独指定';

@@ -1481,13 +1481,15 @@ async function openTransactionEditor(transactionId) {
   );
   updateEditorFieldState();
   document.getElementById('editor-income-allocation-action')?.remove();
-  if(transaction.transaction_type==='income'){
+  if(transaction.offset_group_id){
+    const host=BudgetUI.node('div','','full-width');host.id='editor-income-allocation-action';
+    host.append(BudgetUI.node('p','本笔已归入冲销事项。预算按整件事的净额处理，请在事项中分配净收入或设置消费 / 净亏损承担预算。','subtle-note'));
+    const link=BudgetUI.node('a','打开事项预算');link.href=`/offsets?group=${transaction.offset_group_id}`;link.target='_blank';link.rel='noopener';host.append(link);editorForm.append(host);
+  }else if(transaction.transaction_type==='income'){
     const host=BudgetUI.node('div','','full-width');host.id='editor-income-allocation-action';
     host.append(BudgetUI.node('p','此处修改真实到账。预算金额在收入分配中维护；已有分配不会因修改标签而搬移。','subtle-note'));
-    if(!transaction.offset_group_id||transaction.offset_group_kind==='income'){
-      host.append(BudgetUI.button('查看 / 修改收入预算分配',()=>IncomeAllocations.open(
-        transaction.offset_group_id?'offset_group':'transaction',transaction.offset_group_id||transaction.id,()=>loadSearch())));
-    }else host.append(BudgetUI.node('p','这笔是支出事项的回款，只冲减消费，不再作为收入分配。'));
+    host.append(BudgetUI.button('查看 / 修改收入预算分配',()=>IncomeAllocations.open(
+      'transaction',transaction.id,()=>loadSearch())));
     editorForm.append(host);
   }
   refreshPickers(editorDialog);

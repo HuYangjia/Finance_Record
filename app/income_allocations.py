@@ -368,10 +368,19 @@ def project_income_budget(c, entries, budget_system_ids):
         if entry['kind']!='income':
             result.append(entry)
             continue
+        if entry.get('budget_role') in ('expense', 'unresolved'):
+            # Deficits use the event's expense responsibility, never a positive allocation.
+            if (selected_systems is None or
+                    set(entry.get('budget_system_ids', [])) & selected_systems):
+                result.append(dict(entry, income_allocations=matched))
+                continue
+            if not matched:
+                continue
         if not matched:
             # Legacy tags remain searchable in raw records, but never create budget funding.
             if selected_systems is None:
-                result.append(entry)
+                result.append(dict(entry,budget_system_name='尚未分给预算')
+                              if entry['entry_type']=='offset_group' else entry)
             elif 0 in selected_systems:
                 result.append(dict(entry,budget_system_id=None,budget_system_ids=[0],
                                    budget_system_name=None,budget_mixed=False))

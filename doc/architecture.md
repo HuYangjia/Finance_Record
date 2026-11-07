@@ -201,6 +201,8 @@ Excel 导出至少包含：月度总览、账户余额、交易流水、月度�
 
 `transaction_offset_groups` 保存事项归属缓存与版本，`transaction_offset_members` 保存唯一流水关联。日期取全部成员最早日期，分类继承最早主流水；读取以实际成员为准，关联及原流水写入同步缓存。`app/offsets.py` 负责事项接口、事务校验与审计，`app/personal_cashflow.py` 生成个人收支结果，`app/reporting.py` 共享换算及每日统计，`app/offset_export.py` 将相同结果写入 Excel。
 
+2026-11-07：事项可空 `budget_system_id` 保存消费或净亏损承担预算，省略字段保留原值，显式空值恢复继承支出成员；升级前备份 `finance-pre-offset-budget-*.db`。`personal_cashflow.make_entry` 以来源计价币种推导 `budget_role`，个人收入方向和净额保留；`app/budget_events.py` 为执行与存储共同生成预算消费投影，把负净收入按净亏损扣减。跨预算或缺汇率会阻止显示完整结余。正净收入仍通过 `budget_income_allocations` 分配，详情接口显示实际分配；已有分配失效时保留并警示，绝不自动删减。冲销页统一提供承担预算选择与收入分配弹窗，归组流水编辑链接到该入口。
+
 ## 定期存款
 
 `/term-deposits` 统一维护不同银行和币种的真实定存；首页“存入定期”打开同一记账弹窗。`app/term_deposits.py` 维护合同、预览、存入、编辑、确认到账、撤销到账与删除。`term_deposit_pools` 按币种关联唯一的公共 `bank_term` 账户，`term_deposit_accounts` 将多个来源映射到同币种公共账户，`term_deposits` 保存银行来源、期限、预期利率、计息基准、版本及真实流水引用。存入及本金回流为普通内部转账，只有实际到账利息计收入；定存资产参与净资产、不计可用现金、不参与投资估值，预期利息不入账。

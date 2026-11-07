@@ -58,8 +58,11 @@ window.OffsetUI = (() => {
     const body = node('tbody');
     for (const m of entry.members) {
       const row = node('tr');
+      const budget = entry.kind === 'income'
+        ? (m.transaction_type === 'expense' ? '先冲抵事项收入；净亏损随事项扣减' : '随事项净额分配')
+        : (m.transaction_type === 'income' ? '冲减事项消费，不另分配收入' : `随事项承担：${entry.budget_system_name}`);
       for (const text of [m.transaction_date, m.transaction_type === 'expense' ? '支出' : '收入', m.account_name,
-        `${m.amount} ${m.currency_code}`, m.category_name, (m.effective_budget_system_name||m.budget_system_name||'未归属')+(m.budget_inherited?' · 自动':''), [m.counterparty, m.note].filter(Boolean).join(' · ')]) row.append(node('td', text));
+        `${m.amount} ${m.currency_code}`, m.category_name, budget, [m.counterparty, m.note].filter(Boolean).join(' · ')]) row.append(node('td', text));
       const action = node('td');
       if (editTransaction) {
         const button = node('button', '编辑原流水', 'table-action'); button.type = 'button';
@@ -101,7 +104,7 @@ window.OffsetUI = (() => {
     const cell = node('div', '', 'offset-entry');
     const title = node('div', '', 'offset-entry-title');
     title.append(node('strong', entry.title), node('span', `${entry.statistics_date} · ${entry.allocation_basis?'所选预算分配':entry.kind === 'expense' ? '净支出' : '净收入'} · ${entry.category_name}`));
-    title.append(node('span',entry.budget_system_name||'未归属','status-badge'));
+    title.append(node('span',(entry.kind === 'income' && entry.budget_role === 'expense' ? '净亏损承担：' : '')+(entry.budget_system_name||'未归属'),'status-badge'));
     if (entry.entry_type === 'offset_group' && entry.entry_id) title.append(link(entry.entry_id, '编辑事项'));
     cell.append(title);
     const amounts = node('div', '', 'offset-amounts');

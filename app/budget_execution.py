@@ -6,7 +6,8 @@ from fastapi import HTTPException
 
 from app.budgets import config_data, money, require_system, valid_month
 from app.personal_cashflow import build_entries, read_ledger
-from app.reporting import amount_to_base_currency, nearest_cny_exchange_rate
+from app.reporting import amount_to_budget_currency
+from app.budget_events import expense_entries
 
 
 def month_index(month):
@@ -19,18 +20,7 @@ def month_name(index):
 
 
 def member_amount(member, rates, target):
-    if member['currency_code']==target:
-        return member['amount'],'direct'
-    if target in ('CNY','HKD'):
-        return amount_to_base_currency(member['amount'],member['currency_code'],member['transaction_date'],rates,target)
-    if target=='USD':
-        amount,status=amount_to_base_currency(member['amount'],member['currency_code'],member['transaction_date'],rates,'CNY')
-        if amount is not None and rates:
-            rate=nearest_cny_exchange_rate(rates,member['transaction_date'])
-            divisor=Decimal(rate['usd_cny_rate'])
-            if divisor.is_finite() and divisor>0:
-                return amount/divisor,('exact' if rate['rate_date']==member['transaction_date'] else 'nearest')
-    return None,'missing'
+    return amount_to_budget_currency(member, rates, target)
 
 
 def execution_report(c, end_month, start_month=None, system_id=None, currency_code=None):
@@ -50,9 +40,7 @@ def execution_report(c, end_month, start_month=None, system_id=None, currency_co
         plans[row['budget_system_id']].append(dict(row))
     records,groups,rates=read_ledger(c)
     expenses=defaultdict(list)
-    for entry in build_entries(records,groups,rates):
-        if entry['kind']!='expense':
-            continue
+    for entry in expense_entries(build_entries(records,groups,rates)):
         targets = ({m['effective_budget_system_id'] for m in entry['members'] if m['transaction_type']=='expense'}
                    if entry['budget_mixed'] else {entry['budget_system_id']})
         for target in targets:
@@ -94,6 +82,9 @@ def execution_report(c, end_month, start_month=None, system_id=None, currency_co
                 continue
             counts[month]+=1
             issue=dict(month=month,entry_type=e['entry_type'],entry_id=e['entry_id'],title=e['title'])
+            if e.get('budget_issue'):
+                issues[month].append(dict(issue, reason=e['budget_issue']))
+                continue
             if e['budget_mixed']:
                 issues[month].append(dict(issue,reason='主流水跨预算，尚未分配'))
                 continue

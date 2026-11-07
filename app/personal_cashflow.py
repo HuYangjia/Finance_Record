@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException
 
-from app.reporting import amount_to_base_currency, format_decimal, summarize_daily_records
+from app.reporting import amount_to_base_currency, amount_to_budget_currency, format_decimal, summarize_daily_records
 from app.budgets import (
     daily_expense_system,
     effective_budget,
@@ -44,12 +44,28 @@ def read_ledger(connection):
         SELECT g.*, c.name AS category_name FROM transaction_offset_groups g
         JOIN categories c ON c.id = g.category_id
     """)]
+    reference_codes = {}
+    for row in connection.execute('''SELECT group_id,currency_code FROM budget_plan_funding WHERE group_id IS NOT NULL
+        UNION ALL SELECT group_id,currency_code FROM budget_income_allocations WHERE group_id IS NOT NULL'''):
+        reference_codes.setdefault(row['group_id'], row['currency_code'])
+    currency_places = {r['code']: r['decimal_places'] for r in connection.execute('SELECT code,decimal_places FROM currencies')}
+    systems = {r['id']: r['name'] for r in connection.execute('SELECT id,name FROM budget_systems')}
+    for group in groups:
+        group['_budget_system_names'] = systems
+        if group['id'] in reference_codes:
+            group['budget_reference_currency_code'] = reference_codes[group['id']]
+            group['_budget_reference_places'] = currency_places[reference_codes[group['id']]]
     rates = [dict(row) for row in connection.execute('SELECT * FROM daily_cny_exchange_rates ORDER BY rate_date')]
     return records, groups, rates
 
 
 def make_entry(metadata, members, rates, entry_type='offset_group'):
     result = dict(metadata)
+    result.pop('_budget_system_names', None)
+    result.pop('_budget_reference_places', None)
+    explicit_budget = metadata.get('budget_system_id') if entry_type == 'offset_group' else None
+    result['budget_explicit_system_id'] = explicit_budget
+    result['budget_role'] = 'expense' if metadata['kind'] == 'expense' else 'income'
     if entry_type == 'offset_group':
         primary = sorted((m for m in members if m['transaction_type'] == metadata['kind']),
                          key=lambda m: (m['transaction_date'], m['id']))
@@ -62,11 +78,35 @@ def make_entry(metadata, members, rates, entry_type='offset_group'):
     result.update(entry_type=entry_type, entry_id=metadata['id'], members=members,
                   transaction_count=len(members), member_transaction_ids=[m['id'] for m in members])
     primary_members = [m for m in members if m['transaction_type']==metadata['kind']]
+    if entry_type == 'offset_group' and metadata['kind'] == 'income':
+        reference = metadata.get('budget_reference_currency_code') or primary_members[0]['currency_code']
+        places = metadata.get('_budget_reference_places', primary_members[0]['decimal_places'])
+        net = Decimal(0)
+        missing = False
+        for member in members:
+            value, _ = amount_to_budget_currency(member, rates, reference)
+            if value is None:
+                missing = True
+            else:
+                net += value if member['transaction_type'] == 'income' else -value
+        result['budget_reference_currency_code'] = reference
+        result['budget_net_income'] = None if missing else format_decimal(net, places)
+        if missing:
+            result['budget_role'] = 'unresolved' if any(m['transaction_type'] == 'expense' for m in members) else 'income'
+        elif Decimal(result['budget_net_income']) < 0:
+            result['budget_role'] = 'expense'
+        if result['budget_role'] in ('expense', 'unresolved'):
+            primary_members = [m for m in members if m['transaction_type'] == 'expense']
     budgets = {m.get('effective_budget_system_id',m.get('budget_system_id')) for m in primary_members}
+    if explicit_budget is not None and result['budget_role'] in ('expense', 'unresolved'):
+        budgets = {explicit_budget}
     result['budget_mixed'] = len(budgets)>1
     result['budget_system_id'] = next(iter(budgets)) if len(budgets)==1 else None
     result['budget_system_ids'] = sorted(0 if value is None else value for value in budgets)
-    result['budget_system_name'] = '跨预算 / 待归属' if len(budgets)>1 else (primary_members[0].get('effective_budget_system_name',primary_members[0].get('budget_system_name')) or '未归属')
+    inherited_name = primary_members[0].get('effective_budget_system_name', primary_members[0].get('budget_system_name')) if primary_members else None
+    override_name = (metadata.get('_budget_system_names', {}).get(explicit_budget)
+                     if result['budget_role'] in ('expense', 'unresolved') else None)
+    result['budget_system_name'] = '跨预算 / 待归属' if len(budgets)>1 else (override_name or inherited_name or '未归属')
     result['involved_accounts'] = list({m['account_id']: {'id': m['account_id'], 'name': m['account_name']}
                                        for m in members}.values())
     result['flagged'] = any(m['flag_type'] for m in members)

@@ -1,7 +1,7 @@
 (() => {
   const {node, request, link, entryCell} = window.OffsetUI;
   const $ = (id) => document.getElementById(id);
-  const state = {accounts: [], categories: [], group: null, members: new Map(), offset: 0, candidateOffset: 0, selected: new Map(), dirty: false, busy: false};
+  const state = {accounts: [], categories: [], budgetConfig: null, group: null, members: new Map(), offset: 0, candidateOffset: 0, selected: new Map(), dirty: false, busy: false};
   let listRequest = 0, candidateRequest = 0;
   function status(id, message, error = false) { $(id).textContent = message; $(id).className = error ? 'dialog-status error' : 'dialog-status'; }
   function options(target, rows, empty = '全部') {
@@ -9,7 +9,34 @@
     for (const r of rows) { const option = node('option', r.display_name || r.name); option.value = r.id; target.append(option); }
   }
   function params(form) { const p = new URLSearchParams(); for (const [k,v] of new FormData(form)) if (v) p.set(k,v); return p; }
-  function markDirty() { state.dirty = true; $('preview-content').replaceChildren(); status('editor-status', '有未保存的修改。'); }
+  function markDirty() { state.dirty = true; $('preview-content').replaceChildren(); renderBudget(); status('editor-status', '有未保存的修改。'); }
+  function renderBudget(entry = null) {
+    const button = $('allocate-group-income');
+    const current = entry || (!state.dirty ? state.group : null);
+    const allocations = current?.income_allocations || (!state.dirty ? state.group?.income_allocations : null) || [];
+    const hasAllocations = allocations.length > 0;
+    button.hidden = !state.group || state.group.kind !== 'income';
+    button.disabled = state.dirty || !current || (!hasAllocations && (current.budget_role !== 'income' || Number(current.budget_net_income) <= 0));
+    button.textContent = hasAllocations ? '查看 / 修改净收入分配' : '分配净收入';
+    let message = '选择流水后预览，查看整件事的预算处理。';
+    if (state.dirty) message = '请先预览并保存事项，再分配净收入。';
+    if (current) {
+      if (current.budget_role === 'unresolved') message = '缺少汇率，无法核实净额；相关预算会标记为待核对。';
+      else if (current.budget_role === 'expense') message = `${current.kind === 'income' ? '净亏损' : '净消费 / 退款'}由“${current.budget_system_name}”承担${current.budget_explicit_system_id ? '（事项指定）' : '（继承支出流水）'}。${current.budget_mixed ? '请指定一个承担预算，才能计算完整结余。' : ''}`;
+      else message = `净收入 ${current.budget_net_income ?? '待核实'} ${current.budget_reference_currency_code || ''}；${state.dirty ? '保存后核对收入分配' : state.group?.budget_system_name || '尚未分给预算'}。通过右侧按钮按金额分配，成员标签不决定收入分配。`;
+      if (state.dirty) message += ' 预览尚未保存。';
+      if (allocations.some(a => !a.source_complete)) message += ' 原有收入分配待核对，请打开分配窗口调整。';
+    }
+    if (!state.budgetConfig) message += ' 预算设置暂未加载，重新打开页面后可修改承担预算。';
+    $('offset-budget-status').textContent = message;
+  }
+  async function allocateIncome(group) {
+    if (state.dirty) { status('editor-status', '请先保存事项，再调整净收入分配。', true); return; }
+    await window.IncomeAllocations.open('offset_group', group.id || group.entry_id, async () => {
+      if (state.group?.id === (group.id || group.entry_id)) openEditor(await request(`/api/offset-groups/${state.group.id}`));
+      await loadGroups();
+    });
+  }
   function discardAllowed() { return !state.dirty || confirm('放弃当前尚未保存的编辑？'); }
   function attribution() {
     const members = [...state.members.values()].sort((a,b) => a.transaction_date.localeCompare(b.transaction_date) || a.id-b.id);
@@ -45,8 +72,12 @@
     window.OffsetUI.summary($('group-summary'), data.summary);
     $('group-list').replaceChildren();
     for (const group of data.groups) {
-      const card = entryCell(group); const button = node('button', '打开编辑', 'secondary-button'); button.type='button';
+      const card = entryCell(group); const button = node('button', '编辑 / 事项预算', 'secondary-button'); button.type='button';
       button.onclick = () => editGroup(group.id).catch(showError); card.append(button); $('group-list').append(card);
+      if (group.kind === 'income' && (group.budget_role === 'income' && Number(group.budget_net_income) > 0 || group.income_allocations?.length)) {
+        const allocate = node('button', '分配净收入', 'secondary-button'); allocate.type = 'button';
+        allocate.onclick = () => allocateIncome(group).catch(showError); card.append(allocate);
+      }
     }
     if (!data.groups.length) $('group-list').append(node('p','没有符合条件的事项。','empty-notice'));
     $('groups-page').textContent = `共 ${data.pagination.total} 项 · 第 ${Math.floor(state.offset/20)+1} 页`;
@@ -57,19 +88,24 @@
     state.group = group; state.members = new Map((group?.members || []).map(m=>[m.id,m])); state.dirty=false;
     $('offset-form').reset(); $('offset-kind').value = group?.kind || 'expense';
     $('offset-title').value = group?.title || ''; $('offset-note').value=group?.note || '';
+    if (state.budgetConfig) {
+      options($('offset-budget-system'), state.budgetConfig.systems.filter(s => s.is_active || s.id === group?.budget_explicit_system_id), '自动继承支出流水的预算');
+      $('offset-budget-system').value = group?.budget_explicit_system_id || '';
+    }
     $('editor-title').textContent=group ? `编辑事项 #${group.id}` : '新建事项'; $('dissolve-group').hidden=!group;
-    $('preview-content').replaceChildren(); status('editor-status',''); renderMembers(); $('group-editor').hidden=false; $('group-editor').scrollIntoView({behavior:'smooth'}); $('offset-title').focus();
+    $('preview-content').replaceChildren(); status('editor-status',''); renderMembers(); renderBudget(group); $('group-editor').hidden=false; $('group-editor').scrollIntoView({behavior:'smooth'}); $('offset-title').focus();
   }
   async function editGroup(id) { if (!discardAllowed()) return; const group=await request(`/api/offset-groups/${id}`); openEditor(group); }
   function payload() {
     if (!$('offset-form').reportValidity()) throw new Error('请填写事项名称。');
     if (!attribution().primary) throw new Error('请至少选择一笔与事项方向一致的主流水。');
     return {title:$('offset-title').value.trim(), kind:$('offset-kind').value, note:$('offset-note').value,
+      ...(state.budgetConfig ? {budget_system_id:Number($('offset-budget-system').value) || null} : {}),
       transaction_ids:[...state.members.keys()], expected_version:state.group?.version, group_id:state.group?.id};
   }
   async function preview() {
     const body = payload(); const result=await request('/api/offset-groups/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    $('preview-content').replaceChildren(entryCell(result)); return body;
+    $('preview-content').replaceChildren(entryCell(result)); renderBudget(result); return body;
   }
   async function save(event) {
     event.preventDefault(); if (state.busy) return; state.busy=true; $('save-group').disabled=true; $('offset-form').inert=true; $('new-group').disabled=true; $('group-list').inert=true;
@@ -110,6 +146,7 @@
   $('groups-prev').onclick=()=>{state.offset=Math.max(0,state.offset-20);loadGroups().catch(showError);};
   $('groups-next').onclick=()=>{state.offset+=20;loadGroups().catch(showError);};
   $('offset-form').addEventListener('input',markDirty);$('offset-form').onsubmit=save;
+  $('allocate-group-income').onclick=()=>allocateIncome(state.group).catch(e=>status('editor-status',e.message,true));
   $('offset-kind').onchange=()=>{renderMembers();markDirty();};
   $('preview-group').onclick=()=>preview().catch(e=>status('editor-status',e.message,true));
   $('cancel-group').onclick=()=>{if(discardAllowed()){$('group-editor').hidden=true;state.dirty=false;}};
@@ -131,6 +168,8 @@
   async function initialize(){
     const [accounts,expenses,incomes]=await Promise.all([request('/api/accounts?include_inactive=true'),request('/api/categories?kind=expense&include_inactive=true'),request('/api/categories?kind=income&include_inactive=true')]);
     state.accounts=accounts;state.categories=[...expenses,...incomes];
+    try { state.budgetConfig=await request('/api/budget/config'); $('offset-budget-system').disabled=false; }
+    catch(e) { status('group-status',`预算设置加载失败：${e.message}；仍可维护冲销关联。`,true); }
     for(const id of ['group-account-filter','candidate-account'])options($(id),state.accounts.map(a=>({...a,name:`${a.name} · ${a.currency_code}`})));
     options($('group-category-filter'),state.categories);await loadGroups();
     const id=new URLSearchParams(location.search).get('group');if(id)await editGroup(Number(id));

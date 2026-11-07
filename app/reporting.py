@@ -429,3 +429,19 @@ def summarize_daily_records(converted_records, rate_coverage, matched_count, sta
 
 def amount_from_minor(amount_minor: int, decimal_places: int) -> Decimal:
     return Decimal(amount_minor) / (Decimal(10) ** decimal_places)
+
+
+def amount_to_budget_currency(member, rates, target):
+    """Same conversion for budget execution, event sign and storage balances."""
+    if member['currency_code'] == target:
+        return member['amount'], 'direct'
+    if target in ('CNY', 'HKD'):
+        return amount_to_base_currency(member['amount'], member['currency_code'], member['transaction_date'], rates, target)
+    if target == 'USD':
+        value, status = amount_to_base_currency(member['amount'], member['currency_code'], member['transaction_date'], rates, 'CNY')
+        if value is not None and rates:
+            rate = nearest_cny_exchange_rate(rates, member['transaction_date'])
+            divisor = Decimal(rate['usd_cny_rate'])
+            if divisor.is_finite() and divisor > 0:
+                return value / divisor, ('exact' if rate['rate_date'] == member['transaction_date'] else 'nearest')
+    return None, 'missing'

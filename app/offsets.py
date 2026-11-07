@@ -12,7 +12,7 @@ from app.database import connect, create_backup
 from app.personal_cashflow import (read_ledger, build_entries, make_entry, serialize_entry,
                                    public_member, filter_entries, summarize, analyze, validate_filters,
                                    entry_budget_ids)
-from app.budgets import normalize_budget_filter_ids
+from app.budgets import normalize_budget_filter_ids, require_system
 
 router = APIRouter()
 
@@ -20,6 +20,7 @@ router = APIRouter()
 class OffsetWrite(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     kind: Literal['income', 'expense']
+    budget_system_id: int | None = Field(default=None, gt=0)
     anchor_transaction_id: int | None = Field(default=None, gt=0)
     statistics_date: date | None = None
     category_id: int | None = Field(default=None, gt=0)
@@ -38,7 +39,9 @@ def group_snapshot(connection, group_id):
     group = next((g for g in groups if g['id'] == group_id), None)
     if group is None:
         raise HTTPException(404, '冲销事项不存在。')
-    return serialize_entry(make_entry(group, [r for r in records if r['offset_group_id'] == group_id], rates))
+    entry = make_entry(group, [r for r in records if r['offset_group_id'] == group_id], rates)
+    from app.income_allocations import project_income_budget
+    return serialize_entry(project_income_budget(connection, [entry], None)[0])
 
 
 def group_for_transaction(connection, transaction_id):
@@ -71,13 +74,22 @@ def validate_group(connection, payload, group_id=None):
         raise HTTPException(404, '冲销事项不存在。')
     if original and payload.expected_version != original['version']:
         raise HTTPException(409, '事项已经更新，请重新打开后核对；当前编辑尚未保存。')
+    budget_id = (payload.budget_system_id if 'budget_system_id' in payload.model_fields_set
+                 else original.get('budget_system_id') if original else None)
+    require_system(connection, budget_id, allow_inactive=bool(original and budget_id == original.get('budget_system_id')))
     from app.budget_funding import guard_reference
     for member_id in ids:
         guard_reference(connection,'transaction',member_id)
     if original and original['kind']!=payload.kind:
         guard_reference(connection,'offset_group',group_id)
     metadata = {'id': group_id or 0, 'title': payload.title.strip(), 'kind': payload.kind,
-                'note': (payload.note or '').strip() or None, 'version': original['version'] if original else 1}
+                'note': (payload.note or '').strip() or None, 'version': original['version'] if original else 1,
+                'budget_system_id': budget_id,
+                '_budget_system_names': {r['id']: r['name'] for r in connection.execute('SELECT id,name FROM budget_systems')}}
+    if original:
+        for key in ('budget_reference_currency_code', '_budget_reference_places'):
+            if key in original:
+                metadata[key] = original[key]
     # Dates, category and anchor always come from the original atomic records.
     return make_entry(metadata, sorted((by_id[i] for i in ids), key=lambda r: (r['transaction_date'], r['id'])), rates)
 
@@ -99,9 +111,9 @@ def create_group(payload: OffsetWrite):
         connection.execute('BEGIN IMMEDIATE')
         entry = validate_group(connection, payload)
         cursor = connection.execute("""INSERT INTO transaction_offset_groups
-            (title, kind, anchor_transaction_id, statistics_date, category_id, note)
-            VALUES (?, ?, ?, ?, ?, ?)""", tuple(entry[k] for k in
-            ('title', 'kind', 'anchor_transaction_id', 'statistics_date', 'category_id', 'note')))
+            (title, kind, anchor_transaction_id, statistics_date, category_id, note, budget_system_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""", tuple(entry[k] for k in
+            ('title', 'kind', 'anchor_transaction_id', 'statistics_date', 'category_id', 'note', 'budget_explicit_system_id')))
         group_id = cursor.lastrowid
         connection.executemany('INSERT INTO transaction_offset_members (transaction_id, group_id) VALUES (?, ?)',
                                [(i, group_id) for i in payload.transaction_ids])
@@ -121,8 +133,8 @@ def update_group(group_id: int, payload: OffsetWrite):
         entry = validate_group(connection, payload, group_id)
         before = group_snapshot(connection, group_id)
         connection.execute("""UPDATE transaction_offset_groups SET title=?, kind=?, anchor_transaction_id=?,
-            statistics_date=?, category_id=?, note=?, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?""",
-            tuple(entry[k] for k in ('title', 'kind', 'anchor_transaction_id', 'statistics_date', 'category_id', 'note')) + (group_id,))
+            statistics_date=?, category_id=?, note=?, budget_system_id=?, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?""",
+            tuple(entry[k] for k in ('title', 'kind', 'anchor_transaction_id', 'statistics_date', 'category_id', 'note', 'budget_explicit_system_id')) + (group_id,))
         connection.execute('DELETE FROM transaction_offset_members WHERE group_id=?', (group_id,))
         connection.executemany('INSERT INTO transaction_offset_members (transaction_id, group_id) VALUES (?, ?)',
                                [(i, group_id) for i in payload.transaction_ids])
@@ -204,7 +216,8 @@ def search_personal(start_date: str | None = None, end_date: str | None = None,
     return {'basis': 'offset', 'filters': filters, 'budget_warnings': filters['budget_warnings'], 'pagination': {'limit': limit, 'offset': offset, 'total': len(entries)},
             'entries': [serialize_entry(e) for e in entries[offset:offset+limit]],
             'summary': {**summarize(entries), 'budget_complete': not filters['budget_warnings'] and
-                        not any(e.get('allocation_basis') and any(not r['source_complete'] for r in e['income_allocations']) for e in entries)}
+                        not any((e.get('allocation_basis') or filters['budget_system_ids']) and
+                                any(not r['source_complete'] for r in e.get('income_allocations', [])) for e in entries)}
                        if start_date and end_date else {'available': False, 'reason': '请选择完整日期范围后查看金额汇总。'}}
 
 

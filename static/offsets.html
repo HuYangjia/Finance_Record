@@ -6,6 +6,7 @@
   <link rel="icon" href="/static/compass-rose.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css?v=20261007-1">
   <link rel="stylesheet" href="/static/workspace.css?v=20261018-2">
+  <link rel="stylesheet" href="/static/income-allocations.css?v=20261020-3">
   </head>
 <body>
   <header class="topbar"><div class="topbar-inner">
@@ -46,6 +47,12 @@
         <p id="offset-attribution" class="analysis-summary" aria-live="polite"></p>
         <section class="offset-side"><div class="section-heading"><h3 id="primary-label">主流水：支出</h3><button type="button" data-pick="primary" class="secondary-button">选择已有流水</button></div><div id="primary-members"></div></section>
         <section class="offset-side"><div class="section-heading"><h3 id="opposite-label">冲抵流水：收入</h3><button type="button" data-pick="opposite" class="secondary-button">选择已有流水</button></div><div id="opposite-members"></div></section>
+        <section class="offset-side" aria-labelledby="offset-budget-title">
+          <div class="section-heading"><h3 id="offset-budget-title">事项预算</h3><button id="allocate-group-income" type="button" class="secondary-button" hidden>分配净收入</button></div>
+          <label>消费 / 净亏损承担预算<select id="offset-budget-system" disabled><option value="">自动继承支出流水的预算</option></select></label>
+          <p class="analysis-summary">整件事按净额处理：净收入可拆分到多个预算；消费或净亏损由一个预算承担。这里的选择保留供扣减时使用，原始流水的标签不变。</p>
+          <p id="offset-budget-status" class="analysis-summary" aria-live="polite"></p>
+        </section>
         <div id="preview-content" aria-live="polite"></div><div id="editor-status" role="status"></div>
         <div class="form-actions"><button id="preview-group" type="button" class="secondary-button">预览净额</button><button id="save-group" type="submit">保存事项</button><button id="cancel-group" type="button" class="secondary-button">取消编辑</button><button id="dissolve-group" type="button" class="secondary-button danger-action" hidden>解散事项</button></div>
       </form>
@@ -64,6 +71,8 @@
     <button id="add-candidates" type="button">加入所选</button>
   </dialog>
   <script src="/static/number-input.js?v=20261018-1"></script>
-  <script src="/static/offset-ui.js?v=20261020-3"></script>
-  <script src="/static/offsets.js?v=20261001-2"></script>
+  <script src="/static/budget-ui.js?v=20261001-2"></script>
+  <script src="/static/income-allocations.js?v=20261020-3"></script>
+  <script src="/static/offset-ui.js?v=20261107-1"></script>
+  <script src="/static/offsets.js?v=20261107-1"></script>
 </body></html>

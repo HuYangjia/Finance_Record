@@ -12,6 +12,7 @@ from app.database import connect
 from app.budgets import config_data, currency, money, minor, mutation, require_system, valid_month
 from app.budget_execution import execution_report, member_amount
 from app.personal_cashflow import build_entries, read_ledger
+from app.budget_events import expense_entries
 
 router = APIRouter()
 
@@ -66,7 +67,7 @@ def storage_report(c, end_month, system_id=None, currency_code=None, execution=N
     overrides = {(r['budget_system_id'],'transaction' if r['transaction_id'] else 'offset_group',r['transaction_id'] or r['group_id']):r['storage_method_id']
                  for r in c.execute('SELECT * FROM budget_storage_expenses')}
     records,groups,rates = read_ledger(c)
-    entries = build_entries(records,groups,rates)
+    entries = list(expense_entries(build_entries(records,groups,rates)))
     plans = [dict(r) for r in c.execute('SELECT * FROM budget_plans WHERE month<=?',(end_month,))]
     items = defaultdict(list)
     for row in c.execute('SELECT * FROM budget_plan_items'):
@@ -92,7 +93,7 @@ def storage_report(c, end_month, system_id=None, currency_code=None, execution=N
             override = overrides.get((sid,entry['entry_type'],entry['entry_id']))
             target = override or used_default
             key = storage_key(target) if target else None
-            total = Decimal(0); missing = False
+            total = Decimal(0); missing = bool(entry.get('budget_issue'))
             for member in entry['members']:
                 value,_ = member_amount(member,rates,code)
                 if value is None:
@@ -100,6 +101,7 @@ def storage_report(c, end_month, system_id=None, currency_code=None, execution=N
                 else:
                     total += value if member['transaction_type']=='expense' else -value
             row = dict(entry_type=entry['entry_type'],entry_id=entry['entry_id'],title=entry['title'],date=entry['statistics_date'],
+                       net_income_deficit=bool(entry.get('net_income_deficit')),
                        token=entry_token(entry),storage_method_id=target,override_storage_id=override,
                        inherited=override is None,automatic=target is None,key=key,amount=None,
                        url=f"/offsets?group={entry['entry_id']}" if entry['entry_type']=='offset_group' else f"/accounts?transaction={entry['entry_id']}")
@@ -232,7 +234,7 @@ def set_expense_storage(system_id: int, body: ExpenseWrite):
     with mutation(body.expected_version,lambda c:snapshot(c,system_id)) as c:
         require_system(c,system_id)
         records,groups,rates = read_ledger(c)
-        entry = next((e for e in build_entries(records,groups,rates) if e['entry_type']==body.entry_type and e['entry_id']==body.entry_id),None)
+        entry = next((e for e in expense_entries(build_entries(records,groups,rates)) if e['entry_type']==body.entry_type and e['entry_id']==body.entry_id),None)
         if not entry or entry['kind']!='expense' or entry['budget_mixed'] or entry['budget_system_id']!=system_id:
             raise HTTPException(409,'消费事项或预算归属已变化，请重新加载后选择。')
         if entry_token(entry)!=body.expected_entry_token:

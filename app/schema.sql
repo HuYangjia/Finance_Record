@@ -544,6 +544,7 @@ LEFT JOIN movement_totals ON movement_totals.account_id = accounts.id;
 
 CREATE TABLE IF NOT EXISTS transaction_offset_groups (
     id INTEGER PRIMARY KEY,
+    budget_system_id INTEGER REFERENCES budget_systems(id) ON DELETE RESTRICT,
     title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 120),
     kind TEXT NOT NULL CHECK (kind IN ('income', 'expense')),
     anchor_transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE RESTRICT,
