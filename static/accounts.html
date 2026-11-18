@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>个人财务账本 - 账户与流水</title>
     <link rel="icon" href="/static/compass-rose.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/styles.css?v=20261027-1">
+    <link rel="stylesheet" href="/static/styles.css?v=20261118-1">
     <link rel="stylesheet" href="/static/workspace.css?v=20261018-2">
     <link rel="stylesheet" href="/static/income-allocations.css?v=20261020-3">
 </head>
@@ -111,6 +111,20 @@
         </div>
         <p id="account-summary-note" class="account-summary-note" hidden></p>
         <div id="account-state" class="account-state-grid"></div>
+      </section>
+
+      <section id="account-investment-panel" class="ledger-panel" data-detail-view="account" hidden aria-labelledby="account-investment-title">
+        <div class="section-heading">
+          <h2 id="account-investment-title">投资买卖与估值</h2>
+          <a href="/investments">维护投资记录</a>
+        </div>
+        <p class="account-summary-note">按所选账户和日期展示。总资产包含现金与持仓；买卖和费用说明见交易备注，实际资金流水见下表。</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>日期</th><th>总资产</th><th>投资损益</th><th>交易与费用备注</th></tr></thead>
+            <tbody id="account-investment-body"></tbody>
+          </table>
+        </div>
       </section>
 
       <section id="ledger-panel" class="ledger-panel" data-detail-view="account" hidden aria-labelledby="ledger-title">
@@ -463,6 +477,6 @@
     <script src="/static/frequent-picker.js?v=20261018-3"></script>
     <script src="/static/offset-ui.js?v=20261107-1"></script>
     <script src="/static/date-range.js?v=20261002-5"></script>
-    <script src="/static/accounts.js?v=20261107-1"></script>
+    <script src="/static/accounts.js?v=20261118-1"></script>
   </body>
 </html>

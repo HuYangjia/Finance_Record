@@ -698,7 +698,8 @@ th {
 #ledger-body td:nth-child(8),
 #ledger-body td:nth-child(9),
 #search-results-body td:nth-child(6),
-#search-results-body td:nth-child(7) {
+#search-results-body td:nth-child(7),
+#account-investment-body td:nth-child(4) {
   min-width: 120px;
   white-space: normal;
 }

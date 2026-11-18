@@ -37,7 +37,7 @@ const state = {
   accounts: [],
   categories: [],
   view: "account",
-  detail: { offset: 0, total: 0, loaded: false, account: null },
+  detail: { offset: 0, total: 0, loaded: false, account: null, investmentRecords: [] },
   search: { offset: 0, total: 0, loaded: false },
   detailLimit: 50,
   searchLimit: 20,
@@ -47,6 +47,7 @@ const accountFilterPanel = document.querySelector(".account-filter-panel");
 const accountWarning = document.querySelector("#detail-account-warning");
 const accountSummaryPanel = document.querySelector("#account-summary-panel");
 const ledgerPanel = document.querySelector("#ledger-panel");
+const investmentPanel = document.querySelector("#account-investment-panel");
 const searchPanel = document.querySelector("#transaction-search-panel");
 const searchResultsPanel = document.querySelector("#search-results-panel");
 const searchResultsDetails = document.querySelector("#search-results-details");
@@ -367,6 +368,7 @@ function updateViewVisibility() {
   accountWarning.hidden = !showingAccount || state.accounts.length > 0;
   accountSummaryPanel.hidden = !showingAccount || !state.detail.loaded;
   ledgerPanel.hidden = !showingAccount || !state.detail.loaded;
+  investmentPanel.hidden = !showingAccount || !state.detail.loaded || !state.detail.investmentRecords.length;
   searchPanel.hidden = showingAccount;
   transactionSearchSummaryPanel.hidden = showingAccount || !state.search.loaded;
   searchResultsPanel.hidden = showingAccount || !state.search.loaded;
@@ -636,6 +638,19 @@ function appendCells(row, values) {
   }
 }
 
+function renderInvestmentRecords(records, account) {
+  state.detail.investmentRecords = records;
+  const body = document.querySelector("#account-investment-body");
+  body.replaceChildren();
+  for (const record of records) {
+    const row = document.createElement("tr");
+    const change = Number(record.generated_change) > 0 ? `+${record.generated_change}` : record.generated_change;
+    appendCells(row, [record.valuation_date, `${record.total_value} ${account.currency_code}`,
+      `${change} ${account.currency_code}`, record.note || ""]);
+    body.append(row);
+  }
+}
+
 function renderAccountLedger(records, account) {
   const body = document.querySelector("#ledger-body");
   body.replaceChildren();
@@ -693,6 +708,7 @@ async function loadDetail(resetPage = false) {
   catch (error) { if (serial === detailRequestId) throw error; else return; }
   if (serial !== detailRequestId) return;
   renderAccountState(data.account);
+  renderInvestmentRecords(data.investment_records || [], data.account);
   renderAccountLedger(data.transactions, data.account);
   updateAccountPagination(data.pagination);
   state.detail.loaded = true;

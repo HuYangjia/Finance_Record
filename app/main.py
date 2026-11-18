@@ -1951,6 +1951,26 @@ def account_detail(
             ledger_parameters + filter_parameters + [limit, offset],
         ).fetchall()
         reconciliation = latest_reconciliation_status(connection, account)
+        investment_records = []
+        if account["account_class"] == "asset" and account["account_type"] in INVESTMENT_ACCOUNT_TYPES:
+            valuation_filters = ["account_id = ?"]
+            valuation_parameters: list[Any] = [account_id]
+            if start_date:
+                valuation_filters.append("valuation_date >= ?")
+                valuation_parameters.append(start_date)
+            if end_date:
+                valuation_filters.append("valuation_date <= ?")
+                valuation_parameters.append(end_date)
+            valuation_ids = connection.execute(
+                "SELECT id FROM investment_valuations WHERE "
+                + " AND ".join(valuation_filters)
+                + " ORDER BY valuation_date DESC, id DESC",
+                valuation_parameters,
+            ).fetchall()
+            investment_records = [
+                serialize_investment_valuation(fetch_investment_valuation_snapshot(connection, row["id"]))
+                for row in valuation_ids
+            ]
 
     decimal_places = account["decimal_places"]
     transactions = []
@@ -2039,6 +2059,7 @@ def account_detail(
             "total": total_row["total"],
         },
         "transactions": annotate_transactions(transactions),
+        "investment_records": investment_records,
     }
 
 

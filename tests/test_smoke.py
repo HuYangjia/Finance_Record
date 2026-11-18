@@ -1165,6 +1165,32 @@ class FinanceAppSmokeTest(unittest.TestCase):
             [{"name": "餐饮", "amount": "120.00", "count": 4, "amount_share": "100.0"}],
         )
 
+    def test_account_investment_records_include_zero_gain_and_ignore_ledger_pagination(self):
+        accounts = {account["code"]: account for account in list_accounts()}
+        account_id = accounts["CNY-INVEST-01"]["id"]
+        for day, total, note in [
+            ("2026-09-02", "5000", "买入记录；费用已单列，现金留在投资账户"),
+            ("2026-09-03", "5100", "卖出记录；卖出款留存现金"),
+            ("2026-09-10", "5100", "筛选区间外的投资记录"),
+        ]:
+            upsert_investment_valuation(account_id, day, InvestmentValuationUpsert(total_value=total, note=note))
+        with database.connect() as connection:
+            before = [tuple(row) for row in connection.execute("SELECT * FROM transactions ORDER BY id")]
+
+        detail = account_detail(account_id, start_date="2026-09-02", end_date="2026-09-03",
+                                transaction_type="expense", category_id=self.food_category_id,
+                                flagged_only=True, limit=1, offset=20)
+        self.assertEqual(detail["transactions"], [])
+        records = detail["investment_records"]
+        self.assertEqual([r["valuation_date"] for r in records], ["2026-09-03", "2026-09-02"])
+        self.assertEqual([r["generated_change"] for r in records], ["100.00", "0.00"])
+        self.assertIn("买入记录", records[1]["note"])
+        self.assertEqual(detail["account"]["current_balance"], "5100.00")
+        self.assertEqual(account_detail(account_id, start_date="2026-09-04", end_date="2026-09-09")["investment_records"], [])
+        self.assertEqual(account_detail(accounts["CNY-BANK-01"]["id"])["investment_records"], [])
+        with database.connect() as connection:
+            self.assertEqual(before, [tuple(row) for row in connection.execute("SELECT * FROM transactions ORDER BY id")])
+
     def test_investment_valuation_recalculates_and_converts_base_currency(self):
         accounts = {account["code"]: account for account in list_accounts()}
         investment_account = accounts["CNY-INVEST-01"]
