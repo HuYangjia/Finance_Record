@@ -17,10 +17,17 @@ from app.budgets import normalize_budget_filter_ids, require_system
 router = APIRouter()
 
 
+class CategoryTarget(BaseModel):
+    refund_transaction_id: int = Field(gt=0)
+    expense_transaction_id: int = Field(gt=0)
+
+
 class OffsetWrite(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     kind: Literal['income', 'expense']
     budget_system_id: int | None = Field(default=None, gt=0)
+    category_allocation_mode: Literal['anchor', 'proportional'] | None = None
+    category_targets: list[CategoryTarget] | None = None
     anchor_transaction_id: int | None = Field(default=None, gt=0)
     statistics_date: date | None = None
     category_id: int | None = Field(default=None, gt=0)
@@ -77,6 +84,18 @@ def validate_group(connection, payload, group_id=None):
     budget_id = (payload.budget_system_id if 'budget_system_id' in payload.model_fields_set
                  else original.get('budget_system_id') if original else None)
     require_system(connection, budget_id, allow_inactive=bool(original and budget_id == original.get('budget_system_id')))
+    mode = payload.category_allocation_mode or (original['category_allocation_mode'] if original
+        and original['kind'] == payload.kind else 'proportional' if payload.kind == 'expense' else 'anchor')
+    targets = ([t.model_dump() for t in payload.category_targets] if payload.category_targets is not None
+               else original.get('category_targets', []) if original else [])
+    if (payload.kind != 'expense' and mode != 'anchor') or (mode != 'proportional' and targets):
+        raise HTTPException(422, '回款分摊仅用于按原分类分摊的支出事项；请先解除指定冲减。')
+    if len({t['refund_transaction_id'] for t in targets}) != len(targets):
+        raise HTTPException(422, '同一笔回款只能指定一笔支出，请合并设置。')
+    for target in targets:
+        refund, expense = target['refund_transaction_id'], target['expense_transaction_id']
+        if refund not in ids or expense not in ids or by_id[refund]['transaction_type'] != 'income' or by_id[expense]['transaction_type'] != 'expense':
+            raise HTTPException(422, '指定冲减须引用当前事项中的一笔回款和一笔支出，请先解除失效指定。')
     from app.budget_funding import guard_reference
     for member_id in ids:
         guard_reference(connection,'transaction',member_id)
@@ -85,6 +104,7 @@ def validate_group(connection, payload, group_id=None):
     metadata = {'id': group_id or 0, 'title': payload.title.strip(), 'kind': payload.kind,
                 'note': (payload.note or '').strip() or None, 'version': original['version'] if original else 1,
                 'budget_system_id': budget_id,
+                'category_allocation_mode': mode, 'category_targets': targets,
                 '_budget_system_names': {r['id']: r['name'] for r in connection.execute('SELECT id,name FROM budget_systems')}}
     if original:
         for key in ('budget_reference_currency_code', '_budget_reference_places'):
@@ -111,12 +131,13 @@ def create_group(payload: OffsetWrite):
         connection.execute('BEGIN IMMEDIATE')
         entry = validate_group(connection, payload)
         cursor = connection.execute("""INSERT INTO transaction_offset_groups
-            (title, kind, anchor_transaction_id, statistics_date, category_id, note, budget_system_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)""", tuple(entry[k] for k in
-            ('title', 'kind', 'anchor_transaction_id', 'statistics_date', 'category_id', 'note', 'budget_explicit_system_id')))
+            (title, kind, anchor_transaction_id, statistics_date, category_id, note, budget_system_id, category_allocation_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", tuple(entry[k] for k in
+            ('title', 'kind', 'anchor_transaction_id', 'statistics_date', 'category_id', 'note', 'budget_explicit_system_id', 'category_allocation_mode')))
         group_id = cursor.lastrowid
         connection.executemany('INSERT INTO transaction_offset_members (transaction_id, group_id) VALUES (?, ?)',
                                [(i, group_id) for i in payload.transaction_ids])
+        save_category_targets(connection, group_id, entry['category_targets'])
         result = group_snapshot(connection, group_id)
         audit_group(connection, group_id, 'create', backup.name, after=result)
     return result
@@ -133,14 +154,22 @@ def update_group(group_id: int, payload: OffsetWrite):
         entry = validate_group(connection, payload, group_id)
         before = group_snapshot(connection, group_id)
         connection.execute("""UPDATE transaction_offset_groups SET title=?, kind=?, anchor_transaction_id=?,
-            statistics_date=?, category_id=?, note=?, budget_system_id=?, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?""",
-            tuple(entry[k] for k in ('title', 'kind', 'anchor_transaction_id', 'statistics_date', 'category_id', 'note', 'budget_explicit_system_id')) + (group_id,))
+            statistics_date=?, category_id=?, note=?, budget_system_id=?, category_allocation_mode=?, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?""",
+            tuple(entry[k] for k in ('title', 'kind', 'anchor_transaction_id', 'statistics_date', 'category_id', 'note', 'budget_explicit_system_id', 'category_allocation_mode')) + (group_id,))
         connection.execute('DELETE FROM transaction_offset_members WHERE group_id=?', (group_id,))
         connection.executemany('INSERT INTO transaction_offset_members (transaction_id, group_id) VALUES (?, ?)',
                                [(i, group_id) for i in payload.transaction_ids])
+        save_category_targets(connection, group_id, entry['category_targets'])
         after = group_snapshot(connection, group_id)
         audit_group(connection, group_id, 'update', backup.name, before, after)
     return after
+
+
+def save_category_targets(connection, group_id, targets):
+    connection.execute('DELETE FROM transaction_offset_category_targets WHERE group_id=?', (group_id,))
+    connection.executemany('''INSERT INTO transaction_offset_category_targets
+        (group_id, refund_transaction_id, expense_transaction_id) VALUES (?, ?, ?)''',
+        [(group_id, t['refund_transaction_id'], t['expense_transaction_id']) for t in targets])
 
 
 @router.delete('/api/offset-groups/{group_id}')
@@ -310,6 +339,11 @@ def check_member_update(connection, transaction_id, transaction_type):
     if group_id is None:
         return None
     before = group_snapshot(connection, group_id)
+    member = next(m for m in before['members'] if m['id'] == transaction_id)
+    if transaction_type != member['transaction_type'] and any(
+            transaction_id in (t['refund_transaction_id'], t['expense_transaction_id'])
+            for t in before.get('category_targets', [])):
+        raise HTTPException(409, f'流水参与事项 #{group_id} 的指定冲减，请先在事项中解除指定，再修改类型。')
     has_primary = transaction_type == before['kind'] or any(
         m['id'] != transaction_id and m['transaction_type'] == before['kind']
         for m in before['members']

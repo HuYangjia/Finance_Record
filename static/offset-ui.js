@@ -103,13 +103,27 @@ window.OffsetUI = (() => {
     if (entry.entry_type === 'transaction') return transactionCell(entry, editTransaction);
     const cell = node('div', '', 'offset-entry');
     const title = node('div', '', 'offset-entry-title');
-    title.append(node('strong', entry.title), node('span', `${entry.statistics_date} · ${entry.allocation_basis?'所选预算分配':entry.kind === 'expense' ? '净支出' : '净收入'} · ${entry.category_name}`));
+    title.append(node('strong', entry.title), node('span', `${entry.statistics_date} · ${entry.category_basis?'所选分类份额':entry.allocation_basis?'所选预算分配':entry.kind === 'expense' ? '净支出' : '净收入'} · ${entry.category_name}`));
     title.append(node('span',(entry.kind === 'income' && entry.budget_role === 'expense' ? '净亏损承担：' : '')+(entry.budget_system_name||'未归属'),'status-badge'));
     if (entry.entry_type === 'offset_group' && entry.entry_id) title.append(link(entry.entry_id, '编辑事项'));
     cell.append(title);
     const amounts = node('div', '', 'offset-amounts');
     amounts.append(net(entry, 'CNY'), net(entry, 'HKD'));
     cell.append(amounts, node('p', entry.raw_totals.map(v => `${v.currency_code}：原始支出 ${v.expense} / 原始收入 ${v.income}`).join('；'), 'analysis-summary'));
+    if (entry.category_basis) cell.append(node('p', `上方仅计所选分类；完整事项净额：${Object.entries(entry.whole_valuations).map(([code,v]) => `${v.amount ?? '未完整'} ${code}`).join(' / ')}`, 'analysis-summary'));
+    if (entry.category_breakdown) {
+      const details = node('details', '', 'offset-members'); details.append(node('summary', '查看分类净额与优惠分摊'));
+      details.append(node('p', '共享回款按原支出比例分摊；指定回款只冲减对应支出。金额按各自日期汇率换算，显示尾差统一分配。', 'analysis-summary'));
+      const wrap = node('div', '', 'table-wrap'), table = node('table'), head = node('thead'), tr = node('tr'), body = node('tbody');
+      for (const label of ['分类', '原支出 CNY', '冲减 CNY', '净支出 CNY', '原支出 HKD', '冲减 HKD', '净支出 HKD']) tr.append(node('th', label));
+      head.append(tr); table.append(head);
+      for (const row of entry.category_breakdown.CNY) {
+        const hkd = entry.category_breakdown.HKD.find(r => r.category_id === row.category_id), line = node('tr');
+        for (const value of [row.category_name + (entry.category_basis ? row.selected ? '（本次计入）' : '（未选）' : ''), row.gross, row.deduction, row.amount, hkd.gross, hkd.deduction, hkd.amount]) line.append(node('td', value ?? '未完整'));
+        body.append(line);
+      }
+      table.append(body); wrap.append(table); details.append(wrap); cell.append(details);
+    }
     if (entry.note) cell.append(node('p', entry.note));
     for (const [base,v] of Object.entries(entry.valuations)) cell.append(node('small', `${base}：${coverage(v)}`, 'offset-coverage'));
     cell.append(members(entry, editTransaction)); return cell;

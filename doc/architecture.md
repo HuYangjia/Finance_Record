@@ -201,6 +201,8 @@ Excel 导出至少包含：月度总览、账户余额、交易流水、月度�
 
 `transaction_offset_groups` 保存事项归属缓存与版本，`transaction_offset_members` 保存唯一流水关联。日期取全部成员最早日期，分类继承最早主流水；读取以实际成员为准，关联及原流水写入同步缓存。`app/offsets.py` 负责事项接口、事务校验与审计，`app/personal_cashflow.py` 生成个人收支结果，`app/reporting.py` 共享换算及每日统计，`app/offset_export.py` 将相同结果写入 Excel。
 
+2026-11-18：支出事项的 `category_allocation_mode=proportional` 保留原消费分类，`transaction_offset_category_targets` 保存回款到同事项支出的可选指定。`app/offset_categories.py` 先按原日期换算，再按原金额权重分摊共享回款，指定回款只扣对应分类；Decimal 保留精度，分类展示以最大余数法处理分币尾差。查询保留一件事项与完整成员，分类过滤只投影命中份额，分析只拆分类分布、不拆日历和账户笔数；Excel 分类月预算及“冲销分类分摊”复用该计算。缓存分类 ID 仍继承最早主流水，混合模式显示“多分类”。预算执行和存储始终使用完整事项，不因分摊改变扣减。迁移前备份 `finance-pre-offset-categories-*.db`，旧事项保留 `anchor`，新建支出默认 `proportional`；收入事项规则不变。
+
 2026-11-07：事项可空 `budget_system_id` 保存消费或净亏损承担预算，省略字段保留原值，显式空值恢复继承支出成员；升级前备份 `finance-pre-offset-budget-*.db`。`personal_cashflow.make_entry` 以来源计价币种推导 `budget_role`，个人收入方向和净额保留；`app/budget_events.py` 为执行与存储共同生成预算消费投影，把负净收入按净亏损扣减。跨预算或缺汇率会阻止显示完整结余。正净收入仍通过 `budget_income_allocations` 分配，详情接口显示实际分配；已有分配失效时保留并警示，绝不自动删减。冲销页统一提供承担预算选择与收入分配弹窗，归组流水编辑链接到该入口。
 
 ## 定期存款

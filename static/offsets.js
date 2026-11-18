@@ -1,7 +1,7 @@
 (() => {
   const {node, request, link, entryCell} = window.OffsetUI;
   const $ = (id) => document.getElementById(id);
-  const state = {accounts: [], categories: [], budgetConfig: null, group: null, members: new Map(), offset: 0, candidateOffset: 0, selected: new Map(), dirty: false, busy: false};
+  const state = {accounts: [], categories: [], budgetConfig: null, group: null, members: new Map(), categoryTargets: new Map(), offset: 0, candidateOffset: 0, selected: new Map(), dirty: false, busy: false};
   let listRequest = 0, candidateRequest = 0;
   function status(id, message, error = false) { $(id).textContent = message; $(id).className = error ? 'dialog-status error' : 'dialog-status'; }
   function options(target, rows, empty = '全部') {
@@ -44,9 +44,14 @@
   }
   function renderMembers() {
     const kind = $('offset-kind').value;
+    const split = kind === 'expense' && $('offset-category-mode').value === 'proportional';
+    $('offset-category-mode-field').hidden = kind !== 'expense';
+    $('offset-category-hint').textContent = kind !== 'expense' ? '收入事项保留最早主流水分类。'
+      : split ? '共享优惠按各笔原支出金额比例分摊；回款可指定只冲减某笔支出。保存前可预览分类净额。'
+      : '旧方式会把所有净额归到最早支出分类。混合消费可切换为按原分类分摊，再预览保存。';
     const derived = attribution();
     $('offset-attribution').textContent = derived.date
-      ? `自动归属：${derived.date} · ${derived.primary?.category_name || '请加入至少一笔主流水'}`
+      ? `自动归属：${derived.date} · ${split ? '保留各笔原支出分类' : derived.primary?.category_name || '请加入至少一笔主流水'}`
       : '选择原始流水后自动显示日期和分类。';
     $('primary-label').textContent = `主流水：${kind === 'expense' ? '支出' : '收入'}`;
     $('opposite-label').textContent = `冲抵流水：${kind === 'expense' ? '收入' : '支出'}`;
@@ -58,9 +63,25 @@
         const row = node('div', '', 'offset-member-row');
         row.append(node('span', `#${m.id} · ${m.transaction_date} · ${m.account_name} · ${m.amount} ${m.currency_code}`), node('small', [m.category_name,m.counterparty,m.note].filter(Boolean).join(' · ')));
         const actions = node('div', '', 'row-actions');
-        if (derived.primary?.id === m.id) actions.append(node('small', '分类取自此笔'));
+        if (!split && derived.primary?.id === m.id) actions.append(node('small', '分类取自此笔'));
+        if (split && m.transaction_type === 'income') {
+          const label = node('label', '回款冲减方式');
+          const select = node('select'); select.dataset.categoryRefund = m.id;
+          const shared = node('option', '共享：按全部原支出比例'); shared.value = ''; select.append(shared);
+          for (const paid of state.members.values()) if (paid.transaction_type === 'expense') {
+            const option = node('option', `只冲减 #${paid.id} · ${paid.category_name} · ${paid.amount} ${paid.currency_code}`);
+            option.value = paid.id; select.append(option);
+          }
+          select.value = state.categoryTargets.get(m.id) || '';
+          select.onchange = () => { if (select.value) state.categoryTargets.set(m.id, Number(select.value)); else state.categoryTargets.delete(m.id); markDirty(); };
+          label.append(select); row.append(label);
+        }
         const remove = node('button', '移除关联', 'secondary-button'); remove.type = 'button';
-        remove.onclick = () => { state.members.delete(m.id); markDirty(); renderMembers(); };
+        remove.onclick = () => {
+          state.members.delete(m.id); let cleared = 0;
+          for (const [refund, paid] of state.categoryTargets) if (refund === m.id || paid === m.id) { state.categoryTargets.delete(refund); cleared++; }
+          markDirty(); renderMembers(); if (cleared) status('editor-status', '已移除成员并解除相关指定冲减，请预览后保存。');
+        };
         actions.append(remove); row.append(actions); target.append(row);
       }
     }
@@ -86,7 +107,9 @@
   function showError(error) { status('group-status',error.message,true); }
   function openEditor(group = null) {
     state.group = group; state.members = new Map((group?.members || []).map(m=>[m.id,m])); state.dirty=false;
+    state.categoryTargets = new Map((group?.category_targets || []).map(t => [t.refund_transaction_id, t.expense_transaction_id]));
     $('offset-form').reset(); $('offset-kind').value = group?.kind || 'expense';
+    $('offset-category-mode').value = group?.category_allocation_mode || 'proportional';
     $('offset-title').value = group?.title || ''; $('offset-note').value=group?.note || '';
     if (state.budgetConfig) {
       options($('offset-budget-system'), state.budgetConfig.systems.filter(s => s.is_active || s.id === group?.budget_explicit_system_id), '自动继承支出流水的预算');
@@ -100,6 +123,9 @@
     if (!$('offset-form').reportValidity()) throw new Error('请填写事项名称。');
     if (!attribution().primary) throw new Error('请至少选择一笔与事项方向一致的主流水。');
     return {title:$('offset-title').value.trim(), kind:$('offset-kind').value, note:$('offset-note').value,
+      category_allocation_mode: $('offset-kind').value === 'expense' ? $('offset-category-mode').value : 'anchor',
+      category_targets: $('offset-kind').value === 'expense' && $('offset-category-mode').value === 'proportional'
+        ? [...state.categoryTargets].map(([refund_transaction_id, expense_transaction_id]) => ({refund_transaction_id, expense_transaction_id})) : [],
       ...(state.budgetConfig ? {budget_system_id:Number($('offset-budget-system').value) || null} : {}),
       transaction_ids:[...state.members.keys()], expected_version:state.group?.version, group_id:state.group?.id};
   }
@@ -148,6 +174,7 @@
   $('offset-form').addEventListener('input',markDirty);$('offset-form').onsubmit=save;
   $('allocate-group-income').onclick=()=>allocateIncome(state.group).catch(e=>status('editor-status',e.message,true));
   $('offset-kind').onchange=()=>{renderMembers();markDirty();};
+  $('offset-category-mode').onchange=()=>{renderMembers();markDirty();};
   $('preview-group').onclick=()=>preview().catch(e=>status('editor-status',e.message,true));
   $('cancel-group').onclick=()=>{if(discardAllowed()){$('group-editor').hidden=true;state.dirty=false;}};
   $('dissolve-group').onclick=async()=>{

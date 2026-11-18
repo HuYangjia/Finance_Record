@@ -196,7 +196,7 @@ class OffsetTest(unittest.TestCase):
             other=c.execute("SELECT id FROM categories WHERE kind='expense' AND id!=? ORDER BY id LIMIT 1",(self.categories['expense'],)).fetchone()[0]
             c.execute('UPDATE transactions SET category_id=? WHERE id=?',(other,second))
         group=create_group(OffsetWrite(title='旧客户端',kind='expense',transaction_ids=[second,first],
-            anchor_transaction_id=second,statistics_date='2025-01-01',category_id=other))
+            anchor_transaction_id=second,statistics_date='2025-01-01',category_id=other,category_allocation_mode='anchor'))
         self.assertEqual(group['anchor_transaction_id'],first)
         self.assertEqual(group['statistics_date'],'2026-09-01')
         self.assertEqual(group['category_id'],self.categories['expense'])
@@ -270,6 +270,7 @@ class OffsetTest(unittest.TestCase):
 
     def test_legacy_schema_backup_and_idempotent_migration(self):
         with database.connect() as c:
+            c.execute('DROP TABLE transaction_offset_category_targets')
             c.execute('DROP TABLE transaction_offset_members');c.execute('DROP TABLE transaction_offset_groups')
             c.execute('DROP TABLE change_audit_logs')
             c.execute('''CREATE TABLE change_audit_logs (id INTEGER PRIMARY KEY, entity_type TEXT CHECK(entity_type IN ('transaction','investment_valuation','exchange_rate')),entity_id INTEGER,action TEXT,reason TEXT,before_json TEXT,after_json TEXT,backup_file TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)''')

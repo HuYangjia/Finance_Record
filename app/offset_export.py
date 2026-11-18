@@ -3,8 +3,9 @@ from decimal import Decimal
 
 from openpyxl.styles import Font, PatternFill
 
-from app.personal_cashflow import filter_entries, summarize, serialize_entry, value_entry
+from app.personal_cashflow import filter_entries, summarize, serialize_entry
 from app.reporting import format_decimal
+from app.offset_categories import category_parts
 
 
 def add_sheet(workbook, name, title, headers, rows):
@@ -39,8 +40,13 @@ def append_offset_sheets(workbook, entries, rates, budgets, currency_places, sel
         budget_rows = []
         for row in budgets:
             month = row['budget_month'][:7]
-            matched = [e for e in entries if e['statistics_date'][:7] == month and e['kind'] == 'expense' and e['category_id'] == row['category_id']]
-            values = [value_entry(e, rates, row['currency_code']) for e in matched]
+            matched = [e for e in entries if e['statistics_date'][:7] == month and e['kind'] == 'expense'
+                       and row['category_id'] in e.get('category_ids', [e['category_id']])]
+            values = []
+            for entry in matched:
+                parts = [p for p in category_parts(entry, rates, row['currency_code']) if p['category_id'] == row['category_id']]
+                values.append(dict(amount=None if any(p['amount'] is None for p in parts) else
+                                   sum((p['amount'] for p in parts), Decimal(0))))
             excluded = sum(v['amount'] is None for v in values)
             actual = sum((v['amount'] for v in values if v['amount'] is not None), Decimal(0))
             places = currency_places[row['currency_code']]
@@ -64,8 +70,21 @@ def append_offset_sheets(workbook, entries, rates, budgets, currency_places, sel
     groups = [e for e in public if e['entry_type']=='offset_group']
     add_sheet(workbook, '冲销事项', f'{selected_month} · 按事项统计日期', ['事项编号']+headers,
               [[e['entry_id']]+export_entry(e) for e in groups])
+    category_rows = []
+    for entry in groups:
+        breakdown = entry.get('category_breakdown', {})
+        for part in breakdown.get('CNY', []):
+            other = next(p for p in breakdown['HKD'] if p['category_id'] == part['category_id'])
+            category_rows.append([entry['entry_id'], entry['title'], entry['statistics_date'], part['category_name'],
+                part['gross'], part['deduction'], part['amount'], other['gross'], other['deduction'], other['amount']])
+    add_sheet(workbook, '冲销分类分摊', '按原支出分类分摊；原始收付款与整项净额不变，缺汇率时对应金额留空',
+              ['事项编号', '事项', '统计日期', '分类', 'CNY 原支出', 'CNY 冲减', 'CNY 净支出',
+               'HKD 原支出', 'HKD 冲减', 'HKD 净支出'], category_rows)
+    targets = {e['entry_id']: {t['refund_transaction_id']: t['expense_transaction_id']
+               for t in e.get('category_targets', [])} for e in groups}
     add_sheet(workbook, '冲销关联明细', '相关事项全部成员，含查询月份之外的原始流水',
-              ['事项编号', '事项', '统计日期', '流水编号', '原始日期', '原始类型', '账户', '币种', '金额', '分类', '对象', '备注'],
+              ['事项编号', '事项', '统计日期', '流水编号', '原始日期', '原始类型', '账户', '币种', '金额', '分类', '对象', '备注', '指定冲减支出编号'],
               [[e['entry_id'], e['title'], e['statistics_date'], m['id'], m['transaction_date'], m['transaction_type'],
-                m['account_name'], m['currency_code'], m['amount'], m['category_name'], m['counterparty'], m['note']]
+                m['account_name'], m['currency_code'], m['amount'], m['category_name'], m['counterparty'], m['note'],
+                targets[e['entry_id']].get(m['id'])]
                for e in groups for m in e['members']])

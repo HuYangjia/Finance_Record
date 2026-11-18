@@ -545,6 +545,7 @@ LEFT JOIN movement_totals ON movement_totals.account_id = accounts.id;
 CREATE TABLE IF NOT EXISTS transaction_offset_groups (
     id INTEGER PRIMARY KEY,
     budget_system_id INTEGER REFERENCES budget_systems(id) ON DELETE RESTRICT,
+    category_allocation_mode TEXT NOT NULL DEFAULT 'anchor' CHECK (category_allocation_mode IN ('anchor','proportional')),
     title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 120),
     kind TEXT NOT NULL CHECK (kind IN ('income', 'expense')),
     anchor_transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE RESTRICT,
@@ -563,3 +564,10 @@ CREATE TABLE IF NOT EXISTS transaction_offset_members (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS offset_members_group_index ON transaction_offset_members(group_id);
+
+CREATE TABLE IF NOT EXISTS transaction_offset_category_targets (
+    refund_transaction_id INTEGER PRIMARY KEY REFERENCES transaction_offset_members(transaction_id) ON DELETE CASCADE,
+    group_id INTEGER NOT NULL REFERENCES transaction_offset_groups(id) ON DELETE CASCADE,
+    expense_transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS offset_category_targets_group_index ON transaction_offset_category_targets(group_id);

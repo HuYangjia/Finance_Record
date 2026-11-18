@@ -43,7 +43,9 @@
           <label>方向<select id="offset-kind"><option value="expense">支出后收回</option><option value="income">收入后分出</option></select></label>
           <label>备注<input id="offset-note" maxlength="500"></label>
         </div>
-        <p class="analysis-summary">日期自动取全部成员最早日期，分类继承最早一笔主流水；成员变化时自动更新。</p>
+        <p class="analysis-summary">日期自动取全部成员最早日期。支出可按原分类分摊，事项仍只计算一次净额。</p>
+        <label id="offset-category-mode-field">分类统计方式<select id="offset-category-mode"><option value="proportional">按原支出分类分摊优惠 / 回款</option><option value="anchor">全部归最早一笔主流水（旧方式）</option></select></label>
+        <p id="offset-category-hint" class="analysis-summary"></p>
         <p id="offset-attribution" class="analysis-summary" aria-live="polite"></p>
         <section class="offset-side"><div class="section-heading"><h3 id="primary-label">主流水：支出</h3><button type="button" data-pick="primary" class="secondary-button">选择已有流水</button></div><div id="primary-members"></div></section>
         <section class="offset-side"><div class="section-heading"><h3 id="opposite-label">冲抵流水：收入</h3><button type="button" data-pick="opposite" class="secondary-button">选择已有流水</button></div><div id="opposite-members"></div></section>
@@ -73,6 +75,6 @@
   <script src="/static/number-input.js?v=20261018-1"></script>
   <script src="/static/budget-ui.js?v=20261001-2"></script>
   <script src="/static/income-allocations.js?v=20261020-3"></script>
-  <script src="/static/offset-ui.js?v=20261107-1"></script>
-  <script src="/static/offsets.js?v=20261107-1"></script>
+  <script src="/static/offset-ui.js?v=20261118-1"></script>
+  <script src="/static/offsets.js?v=20261118-1"></script>
 </body></html>

@@ -68,6 +68,11 @@ def initialize_database() -> None:
     if DATABASE_PATH.exists():
         with sqlite3.connect(DATABASE_PATH) as existing:
             tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if 'transaction_offset_groups' in tables and 'category_allocation_mode' not in {
+                    row[1] for row in existing.execute('PRAGMA table_info(transaction_offset_groups)')}:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(BACKUP_DIR / f"finance-pre-offset-categories-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
             if 'transaction_offset_groups' in tables and 'budget_system_id' not in {
                     row[1] for row in existing.execute('PRAGMA table_info(transaction_offset_groups)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -163,6 +168,8 @@ def initialize_database() -> None:
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         if 'budget_system_id' not in {r['name'] for r in connection.execute('PRAGMA table_info(transaction_offset_groups)')}:
             connection.execute('ALTER TABLE transaction_offset_groups ADD COLUMN budget_system_id INTEGER REFERENCES budget_systems(id) ON DELETE RESTRICT')
+        if 'category_allocation_mode' not in {r['name'] for r in connection.execute('PRAGMA table_info(transaction_offset_groups)')}:
+            connection.execute("ALTER TABLE transaction_offset_groups ADD COLUMN category_allocation_mode TEXT NOT NULL DEFAULT 'anchor' CHECK (category_allocation_mode IN ('anchor','proportional'))")
         migrate_daily_frequent_snapshot_schema(connection)
         from app.budget_migrations import migrate_shared_storage, migrate_unallocated_storage
         migrate_shared_storage(connection)

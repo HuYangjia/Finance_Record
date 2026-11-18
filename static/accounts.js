@@ -9,7 +9,7 @@ let detailRequestId = 0;
 function updateBasisDescription() {
   const description = document.querySelector('#basis-description');
   if (description) description.textContent = isOffsetBasis()
-    ? '事项日期取最早原始流水，分类继承最早主流水。涉及账户命中后保留完整事项及其他日期的回款。'
+    ? '事项日期取最早原始流水。按原分类分摊的支出只汇总所选分类份额；收入及旧方式保留主流水分类。涉及账户命中后仍可展开完整事项。'
     : '按原始流水日期、类型和账户资金流查询。';
   const label = document.querySelector('#search-account').closest('label').querySelector('span');
   if (label) label.textContent = isOffsetBasis() ? '涉及账户' : '账户';

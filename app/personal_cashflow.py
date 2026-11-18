@@ -13,6 +13,7 @@ from app.budgets import (
     effective_budget,
     normalize_budget_filter_ids,
 )
+from app.offset_categories import category_parts, proportional, project_categories, public_breakdown, rounded_parts
 
 
 def read_ledger(connection):
@@ -50,7 +51,12 @@ def read_ledger(connection):
         reference_codes.setdefault(row['group_id'], row['currency_code'])
     currency_places = {r['code']: r['decimal_places'] for r in connection.execute('SELECT code,decimal_places FROM currencies')}
     systems = {r['id']: r['name'] for r in connection.execute('SELECT id,name FROM budget_systems')}
+    targets = defaultdict(list)
+    for row in connection.execute('SELECT * FROM transaction_offset_category_targets ORDER BY refund_transaction_id'):
+        targets[row['group_id']].append(dict(refund_transaction_id=row['refund_transaction_id'],
+                                            expense_transaction_id=row['expense_transaction_id']))
     for group in groups:
+        group['category_targets'] = targets[group['id']]
         group['_budget_system_names'] = systems
         if group['id'] in reference_codes:
             group['budget_reference_currency_code'] = reference_codes[group['id']]
@@ -111,6 +117,12 @@ def make_entry(metadata, members, rates, entry_type='offset_group'):
                                        for m in members}.values())
     result['flagged'] = any(m['flag_type'] for m in members)
     result['_valuations'] = {base: value_entry(result, rates, base) for base in ('CNY', 'HKD')}
+    result['category_ids'] = [result['category_id']]
+    if proportional(result):
+        result['_category_parts'] = {base: category_parts(result, rates, base) for base in ('CNY', 'HKD')}
+        result['category_ids'] = [r['category_id'] for r in result['_category_parts']['HKD']]
+        if len(result['category_ids']) > 1:
+            result['category_name'] = '多分类'
     return result
 
 
@@ -165,13 +177,20 @@ def serialize_entry(entry):
         currency = member['currency_code']
         bucket = raw.setdefault(currency, {'income': Decimal(0), 'expense': Decimal(0), 'places': member['decimal_places']})
         bucket[member['transaction_type']] += member['amount']
-    result = {k: v for k, v in entry.items() if k not in ('members', '_valuations')}
+    result = {k: v for k, v in entry.items() if k != 'members' and not k.startswith('_')}
     result['members'] = [public_member(member) for member in entry['members']]
     result['valuations'] = {
         base: {**value, 'available': value['amount'] is not None,
                'amount': format_decimal(value['amount'], 2) if value['amount'] is not None else None}
         for base, value in entry['_valuations'].items()
     }
+    if entry.get('_category_parts'):
+        result['category_breakdown'] = public_breakdown(entry)
+    if entry.get('category_basis'):
+        result['whole_valuations'] = {
+            base: dict(available=value['amount'] is not None,
+                       amount=format_decimal(value['amount'], 2) if value['amount'] is not None else None)
+            for base, value in entry['_whole_valuations'].items()}
     result['raw_totals'] = [
         {'currency_code': currency, 'income': format_decimal(bucket['income'], bucket['places']),
          'expense': format_decimal(bucket['expense'], bucket['places']),
@@ -224,8 +243,12 @@ def filter_entries(entries, start_date=None, end_date=None, transaction_types=No
             continue
         if start_date and entry['statistics_date'] < start_date or end_date and entry['statistics_date'] > end_date:
             continue
-        if transaction_types and entry['kind'] not in transaction_types or category_ids and entry['category_id'] not in category_ids:
+        if transaction_types and entry['kind'] not in transaction_types:
             continue
+        if category_ids:
+            entry = project_categories(entry, category_ids)
+            if entry is None:
+                continue
         if involved_account_id is not None and involved_account_id not in {a['id'] for a in entry['involved_accounts']}:
             continue
         if flagged_only and not entry['flagged']:
@@ -269,6 +292,7 @@ def analyze(entries, start_date, end_date, kind):
     if (end.year - start.year) * 12 + end.month - start.month + 1 > 12:
         raise HTTPException(422, '流水详情最多统计 12 个自然月。')
     converted = []
+    category_totals = {}
     coverage = {'direct_hkd_count': 0, 'exact_rate_count': 0, 'nearest_rate_count': 0,
                 'excluded_count': 0, 'missing_currencies': set()}
     for entry in entries:
@@ -282,7 +306,22 @@ def analyze(entries, start_date, end_date, kind):
         converted.append({'transaction_date': entry['statistics_date'], 'amount_hkd': value['amount'],
                           'category_name': entry['category_name'], 'direction': None,
                           'account_name': entry['involved_accounts'][0]['name'] if len(entry['involved_accounts']) == 1 else '多账户事项'})
+        parts = entry.get('_category_parts', {}).get('HKD', [dict(category_id=entry['category_id'], category_name=entry['category_name'], amount=value['amount'])])
+        for part in parts:
+            if entry.get('category_basis') and part['category_id'] not in entry['selected_category_ids']:
+                continue
+            bucket = category_totals.setdefault(part['category_name'], dict(amount=Decimal(0), count=0, category_id=part['category_id']))
+            bucket['amount'] += part['amount']
+            bucket['count'] += 1
     data = summarize_daily_records(converted, coverage, len(entries), start_date, end_date, kind)
+    names = sorted(category_totals, key=lambda name: (-category_totals[name]['amount'], name))
+    rounded = rounded_parts([category_totals[name]['amount'] for name in names],
+                            keys=[category_totals[name]['category_id'] for name in names])
+    total = sum((v['amount'] for v in category_totals.values()), Decimal(0))
+    show_share = total > 0 and not coverage['excluded_count'] and all(category_totals[n]['amount'] >= 0 for n in names)
+    data['category_distribution'] = [dict(name=name, amount=format_decimal(amount, 2), count=category_totals[name]['count'],
+        **(dict(amount_share=format_decimal(category_totals[name]['amount'] * 100 / total, 1)) if show_share else {}))
+        for name, amount in zip(names, rounded)]
     data.update(basis='offset', entry_count=len(entries), transaction_count=sum(e['transaction_count'] for e in entries),
                 main_amount_label='净支出' if kind == 'expense' else '净收入', account_label='涉及账户',
                 filters={'start_date': start_date, 'end_date': end_date})
