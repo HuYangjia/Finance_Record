@@ -29,13 +29,18 @@ def append_offset_sheets(workbook, entries, rates, budgets, currency_places, sel
     selected = filter_entries(entries, start_date=selected_month+'-01', end_date=end_date)
     public = [serialize_entry(e) for e in selected]
     label = '冲销后收支（事项按统计日期，汇率按每笔原始日期）'
-    totals = summarize(selected)['valuations']
+    summary = summarize(selected)
+    totals = summary['native_totals']
     if basis == 'offset':
         workbook['月度总览'].title = '原始月度总览'
-        add_sheet(workbook, '月度总览', f'{selected_month} · {label}；账户资产见账户余额 / 本币总统计',
-                  ['计价币种', '收入', '支出', '结余', '覆盖情况', '未纳入数量', '缺失币种'],
+        add_sheet(workbook, '月度总览', f'{selected_month} · 原币分别统计（未换算）；事项按统计日归属',
+                  ['原币种', '收入', '支出', '结余', '覆盖情况', '未纳入数量'],
                   [[v['currency_code'], v['income'], v['expense'], v['balance'],
-                    '完整' if v['complete'] else '仅可计算部分', v['excluded_count'], '、'.join(v['missing_currencies'])] for v in totals])
+                    '完整' if v['complete'] else '仅可计算部分', v['excluded_count']] for v in totals])
+        add_sheet(workbook, '折算收支参考', f'{selected_month} · 全部币种折算，不能与原币账单混用',
+                  ['折算币种', '收入', '支出', '结余', '覆盖情况'],
+                  [[v['currency_code'], v['income'], v['expense'], v['balance'],
+                    '完整' if v['complete'] else '仅可计算部分'] for v in summary['valuations']])
         workbook['月度预算'].title = '原始月度预算'
         budget_rows = []
         for row in budgets:
@@ -60,12 +65,13 @@ def append_offset_sheets(workbook, entries, rates, budgets, currency_places, sel
     for name in ('月度总览', '月度预算'):
         if basis == 'raw':
             workbook[name]['A2'] = f'{selected_month} · 原始收付口径'
-    headers = ['统计日期', '类型', '标题', '分类', 'CNY 净额', 'HKD 净额', '原始流水数', '原币分项', '换算覆盖', '备注']
+    headers = ['统计日期', '类型', '标题', '分类', 'CNY 折算净额', 'HKD 折算净额', '原始流水数', '原币分项', '换算覆盖', '备注', '原币净额（未换算）']
     def export_entry(e):
         return [e['statistics_date'], '净支出' if e['kind']=='expense' else '净收入', e['title'], e['category_name'],
                 e['valuations']['CNY']['amount'], e['valuations']['HKD']['amount'], e['transaction_count'],
                 '；'.join(f"{v['currency_code']}: 收 {v['income']} / 支 {v['expense']}" for v in e['raw_totals']),
-                '；'.join(f"{b}: " + ('完整' if v['available'] else '无法完整换算 '+','.join(v['missing_currencies'])) for b,v in e['valuations'].items()), e.get('note')]
+                '；'.join(f"{b}: " + ('完整' if v['available'] else '无法完整换算 '+','.join(v['missing_currencies'])) for b,v in e['valuations'].items()), e.get('note'),
+                '；'.join(f"{v['amount']} {v['currency_code']}" for v in e['native_amounts'])]
     add_sheet(workbook, '个人收支', f'{selected_month} · {label}', headers, [export_entry(e) for e in public])
     groups = [e for e in public if e['entry_type']=='offset_group']
     add_sheet(workbook, '冲销事项', f'{selected_month} · 按事项统计日期', ['事项编号']+headers,

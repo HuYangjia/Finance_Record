@@ -215,6 +215,7 @@ def build_transaction_analysis(
     start_date: str,
     end_date: str,
     transaction_type: str,
+    currency_code=None,
 ) -> dict[str, Any]:
     converted_records = []
     rate_coverage = {
@@ -227,7 +228,10 @@ def build_transaction_analysis(
 
     for row in rows:
         main_amount = analysis_main_amount(row)
-        amount_hkd, rate_status = amount_to_hkd(
+        if currency_code and main_amount['currency_code'] != currency_code:
+            main_amount = dict(amount=amount_from_minor(row['inflow_minor'], row['destination_decimal_places']),
+                               currency_code=row['destination_currency_code'], account_name=row['destination_account_name'], direction=None)
+        amount_hkd, rate_status = (main_amount['amount'], 'direct') if currency_code else amount_to_hkd(
             main_amount["amount"],
             main_amount["currency_code"],
             row["transaction_date"],
@@ -253,7 +257,8 @@ def build_transaction_analysis(
             }
         )
 
-    return summarize_daily_records(converted_records, rate_coverage, len(rows), start_date, end_date, transaction_type)
+    return {**summarize_daily_records(converted_records, rate_coverage, len(rows), start_date, end_date, transaction_type),
+            'currency_code': currency_code or 'HKD', 'amount_scope': 'native' if currency_code else 'converted'}
 
 
 def summarize_daily_records(converted_records, rate_coverage, matched_count, start_date, end_date, transaction_type):

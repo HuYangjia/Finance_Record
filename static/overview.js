@@ -46,7 +46,7 @@ function renderMetricGroup(targetId, records, fields, emptyMessage) {
     const item = document.createElement("article");
     item.className = "metric-item";
     const heading = document.createElement("h3");
-    heading.textContent = record.currency_code;
+    heading.textContent = `${record.currency_code} · 原币，未换算`;
     item.append(heading);
     for (const field of fields) {
       const row = document.createElement("div");
@@ -119,7 +119,7 @@ function renderBaseCurrencyTotals(records) {
     const item = document.createElement("article");
     item.className = "metric-item";
     const heading = document.createElement("h3");
-    heading.textContent = record.currency_code;
+    heading.textContent = `${record.currency_code} · 全部账户折算`;
     item.append(heading);
 
     for (const [labelText, amount] of [

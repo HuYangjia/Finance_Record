@@ -72,6 +72,10 @@ def project_categories(entry, category_ids):
     result = dict(entry, category_basis=True, selected_category_ids=sorted(selected))
     result['_whole_valuations'] = entry.get('_whole_valuations', entry['_valuations'])
     result['_valuations'] = {}
+    result['_native_amounts'] = {}
+    for code, rows in entry['_native_parts'].items():
+        parts = [r for r in rows if r['category_id'] in selected]
+        result['_native_amounts'][code] = None if any(r['amount'] is None for r in parts) else sum((r['amount'] for r in parts), Decimal(0))
     for code, whole in result['_whole_valuations'].items():
         parts = [r for r in entry['_category_parts'][code] if r['category_id'] in selected]
         result['_valuations'][code] = dict(whole, amount=None if whole['amount'] is None else

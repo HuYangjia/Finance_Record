@@ -3171,6 +3171,29 @@ def list_transactions(limit: int = Query(default=20, ge=1, le=100)):
     return annotate_transactions(result)
 
 
+@app.get('/api/currencies')
+def list_currencies(include_inactive: bool = False):
+    with connect() as connection:
+        return [dict(row) for row in connection.execute('SELECT code,name,symbol,decimal_places,is_active FROM currencies '
+            + ('' if include_inactive else 'WHERE is_active=1 ') + 'ORDER BY code')]
+
+
+def currency_search_filter(filters, parameters, currency_code, account_id=None):
+    if not currency_code:
+        return
+    if account_id is None:
+        filters.append('(source.currency_code=? OR destination.currency_code=?)')
+        parameters.extend([currency_code, currency_code])
+    else:
+        filters.append('((source.currency_code=? AND source.id=?) OR (destination.currency_code=? AND destination.id=?))')
+        parameters.extend([currency_code, account_id, currency_code, account_id])
+
+
+def require_search_currency(connection, currency_code):
+    if currency_code and not connection.execute('SELECT 1 FROM currencies WHERE code=?', (currency_code,)).fetchone():
+        raise HTTPException(422, '币种不存在。')
+
+
 def build_transaction_search_filters(
     account_id: int | None,
     start_date: str | None,
@@ -3240,6 +3263,7 @@ def search_transactions(
     offset: int = 0,
     budget_system_id: int | None = None,
     budget_system_ids: list[int] = Query(default=[]),
+    currency_code: str | None = None,
 ):
     start_date = validate_optional_date(start_date, "开始日期")
     end_date = validate_optional_date(end_date, "结束日期")
@@ -3280,6 +3304,7 @@ def search_transactions(
         flagged_only,
     )
     budget_filter_sql(filters, parameters, budget_system_ids=budget_system_ids)
+    currency_search_filter(filters, parameters, currency_code, account_id)
     where_clause = f" WHERE {' AND '.join(filters)}" if filters else ""
 
     transaction_query = """
@@ -3295,6 +3320,7 @@ def search_transactions(
             ON investment_valuations.generated_transaction_id = transactions.id
     """
     with connect() as connection:
+        require_search_currency(connection, currency_code)
         if account_id is not None:
             account_exists = connection.execute(
                 "SELECT 1 FROM accounts WHERE id = ?",
@@ -3419,6 +3445,7 @@ def search_transactions(
         account_id,
         transaction_types,
         currency_decimal_places,
+        currency_code,
     )
     summary['budget_income_allocations'] = allocation_totals
     summary.update(allocation_info)
@@ -3426,6 +3453,7 @@ def search_transactions(
         transaction['income_allocations'] = allocation_rows.get(transaction['id'],[])
     return {
         "filters": {
+            "currency_code": currency_code,
             "account_id": account_id,
             "start_date": start_date,
             "end_date": end_date,
@@ -3622,6 +3650,7 @@ def build_transaction_search_summary(
     account_id: int | None,
     selected_transaction_types: list[str],
     currency_decimal_places: dict[str, int],
+    currency_code=None,
 ) -> dict[str, Any]:
     combined = new_transaction_search_summary_bucket()
     type_buckets: dict[str, dict[str, Any]] = {}
@@ -3638,7 +3667,7 @@ def build_transaction_search_summary(
 
         if row["source_account_id"] is not None and (
             account_id is None or row["source_account_id"] == account_id
-        ):
+        ) and (not currency_code or row['source_currency_code'] == currency_code):
             add_transaction_search_summary_leg(
                 buckets,
                 currency_code=row["source_currency_code"],
@@ -3652,7 +3681,7 @@ def build_transaction_search_summary(
             )
         if row["destination_account_id"] is not None and (
             account_id is None or row["destination_account_id"] == account_id
-        ):
+        ) and (not currency_code or row['destination_currency_code'] == currency_code):
             add_transaction_search_summary_leg(
                 buckets,
                 currency_code=row["destination_currency_code"],
@@ -3729,6 +3758,7 @@ def transaction_analysis(
     flagged_only: bool = False,
     budget_system_id: int | None = None,
     budget_system_ids: list[int] = Query(default=[]),
+    currency_code: str | None = None,
 ):
     start_date = validate_optional_date(start_date, "开始日期")
     end_date = validate_optional_date(end_date, "结束日期")
@@ -3792,8 +3822,10 @@ def transaction_analysis(
         parameters.extend([search_term] * 5)
 
     budget_filter_sql(filters, parameters, budget_system_ids=budget_system_ids)
+    currency_search_filter(filters, parameters, currency_code, account_id)
     where_clause = f" WHERE {' AND '.join(filters)}"
     with connect() as connection:
+        require_search_currency(connection, currency_code)
         if account_id is not None:
             account_exists = connection.execute(
                 "SELECT 1 FROM accounts WHERE id = ?",
@@ -3844,8 +3876,10 @@ def transaction_analysis(
         start_date,
         end_date,
         transaction_type,
+        currency_code,
     )
     result["filters"] = {
+        "currency_code": currency_code,
         "account_id": account_id,
         "budget_system_id": budget_system_id,
         "budget_system_ids": budget_system_ids,

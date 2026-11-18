@@ -1,0 +1,52 @@
+// Desktop integration, guarded against accidentally using the real ledger.
+const {chromium,request}=require('playwright');
+const assert=require('node:assert/strict');
+const base='http://127.0.0.1:18110';
+(async()=>{
+  const api=await request.newContext({baseURL:base});
+  const json=async r=>{assert(r.ok(),await r.text());return r.json();};
+  const get=async path=>json(await api.get(path));
+  assert.deepEqual(await get('/__budget_test_fixture'),{fixture:'budget-browser',temporary:true});
+  const accounts=await get('/api/accounts'),hkd=accounts.find(a=>a.code==='ZABANK-HKD').id,cny=accounts.find(a=>a.code==='WECHAT').id;
+  const expense=(await get('/api/categories?kind=expense'))[0].id,income=(await get('/api/categories?kind=income'))[0].id;
+  const paid=await json(await api.post('/api/expenses',{data:{transaction_date:'2026-10-05',source_account_id:hkd,category_id:expense,amount:'100'}}));
+  const returned=await json(await api.post('/api/incomes',{data:{transaction_date:'2026-10-05',destination_account_id:cny,category_id:income,amount:'80'}}));
+  await json(await api.post('/api/expenses',{data:{transaction_date:'2026-10-05',source_account_id:cny,category_id:expense,amount:'10'}}));
+  await json(await api.post('/api/offset-groups',{data:{title:'跨币种原币验证',kind:'expense',transaction_ids:[paid.id,returned.id]}}));
+  const before=await get('/api/accounts');
+  const browser=await chromium.launch({headless:true,...(process.env.FINANCE_TEST_BROWSER?{executablePath:process.env.FINANCE_TEST_BROWSER}:{})});
+  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];
+  page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
+  const text=(selector,value)=>page.waitForFunction(([s,v])=>document.querySelector(s)?.textContent.includes(v),[selector,value]);
+  const search=()=>page.locator('#transaction-search-form button[type=submit]').click();
+  try{
+    await page.goto(base+'/overview');await page.fill('#month','2026-10');await page.locator('#cashflow-basis').selectOption('raw');
+    await page.locator('#month').dispatchEvent('change');
+    await text('#cash-flow','CNY · 原币');await text('#cash-flow','70.00');
+    await page.selectOption('#cashflow-basis','offset');await text('#personal-cash-flow','原币，未换算');
+    const cnyCard=page.locator('#personal-cash-flow .metric-item').filter({hasText:'CNY'});
+    assert((await cnyCard.textContent()).includes('-70.00'));assert((await cnyCard.textContent()).includes('70.00'));
+    await page.goto(base+'/accounts');await page.waitForFunction(()=>!document.querySelector('#search-currency').disabled);
+    await page.locator('.detail-view-mode[data-view=search]').click();
+    await page.fill('#search-start-date','2026-10-01');await page.fill('#search-end-date','2026-10-31');
+    await page.selectOption('#search-currency','CNY');await page.selectOption('#cashflow-basis','raw');await search();
+    await text('#transaction-search-summary-content','70.00 CNY');
+    const raw=await get('/api/transactions/search?currency_code=CNY');assert.equal(raw.pagination.total,2);
+    await page.selectOption('#cashflow-basis','offset');await page.locator('#search-type-options input[value=expense]').check();await search();
+    await text('#transaction-search-summary-content','-70.00');await text('#analysis-content','-70.00 CNY');
+    await text('#analysis-status','CNY 原币');
+    assert(!(await page.locator('#analysis-content').textContent()).includes(' HKD'));
+    await page.locator('#search-results-details > summary').click();await text('#search-results-body','-80.00 CNY（原币）');
+    await text('#search-results-body','其他币种成员仅供追溯');
+    await page.selectOption('#search-currency','HKD');await search();
+    await text('#transaction-search-summary-content','100.00');await text('#analysis-content','100.00 HKD');
+    await text('#analysis-status','HKD 原币');
+    await page.selectOption('#search-currency','USD');await search();
+    await text('#search-summary','共 0');
+    await page.click('#clear-search-filters');assert.equal(await page.locator('#search-currency').inputValue(),'');
+    assert.deepEqual(await get('/api/accounts'),before);
+    assert.deepEqual(errors,[]);
+    await page.screenshot({path:'/tmp/finance-native-currency-desktop.png',fullPage:true});
+    console.log('PASS desktop raw/native overview parity, original-currency selector, cross-currency refund, dynamic chart units, no-match and reset');
+  }finally{await browser.close();await api.dispose();}
+})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -4,6 +4,8 @@ try {
   if (basisSelect) basisSelect.value = ['offset', 'groups'].includes(saved) ? saved : 'raw';
 } catch (_) {}
 const isOffsetBasis = () => Boolean(basisSelect && basisSelect.value !== 'raw');
+const searchCurrency = document.querySelector('#search-currency');
+let analysisCurrency = 'HKD';
 let searchRequestId = 0;
 let detailRequestId = 0;
 function updateBasisDescription() {
@@ -419,6 +421,7 @@ function buildSearchPath() {
     limit: String(state.searchLimit),
     offset: String(state.search.offset),
   });
+  if (searchCurrency?.value) parameters.set('currency_code', searchCurrency.value);
   for (const budgetId of selectedSearchBudgets()) {
     parameters.append('budget_system_ids', budgetId);
   }
@@ -870,8 +873,11 @@ function renderTransactionSearchSummary(summary) {
   combined.append(
     heading,
     createSearchSummarySection("原币种明细", summary.raw_totals_by_currency, "币种"),
-    createSearchSummarySection("统一计价合计", summary.valuations, "计价货币", true),
   );
+  const converted = document.createElement('details');
+  const convertedLabel = document.createElement('summary'); convertedLabel.textContent = '查看匹配资金腿的折算参考（非原币账单）';
+  converted.append(convertedLabel, createSearchSummarySection('全部命中资金腿折算', summary.valuations, '折算币种', true));
+  combined.append(converted);
   transactionSearchSummaryContent.append(combined);
 
   if (summary.by_type.length <= 1) {
@@ -956,6 +962,7 @@ function buildAnalysisPath() {
     end_date: searchEndDateInput.value,
     transaction_type: selectedSearchTypes()[0],
   });
+  if (searchCurrency?.value) parameters.set('currency_code', searchCurrency.value);
   for (const budgetId of selectedSearchBudgets()) {
     parameters.append('budget_system_ids', budgetId);
   }
@@ -1032,7 +1039,7 @@ function isoDate(year, month, day) {
 function renderAnalysisCalendar(data) {
   const block = createAnalysisBlock("按日历查看");
   block.append(createAnalysisSummary(
-    `按${data.main_amount_label}汇总，金额已统一换算为 HKD；点击日期查看${data.basis === "offset" ? "归属当天的统计记录，再展开原始流水" : "当天逐笔流水"}。`,
+    `按${data.main_amount_label}汇总，${data.amount_scope === 'native' ? `仅计 ${data.currency_code} 原币` : '全部命中金额折算为 HKD'}；点击日期查看${data.basis === "offset" ? "归属当天的统计记录，再展开原始流水" : "当天逐笔流水"}。`,
   ));
   const dayTotals = new Map(
     data.daily_totals.map((item) => [item.transaction_date, item]),
@@ -1076,9 +1083,9 @@ function renderAnalysisCalendar(data) {
       cell.append(dateLabel);
       if (daily && inRange) {
         cell.type = "button";
-        cell.title = `${dateValue}：${daily.amount} HKD，${daily.count} 笔`;
+        cell.title = `${dateValue}：${daily.amount} ${analysisCurrency}，${daily.count} 笔`;
         const amount = document.createElement("strong");
-        amount.textContent = `${daily.amount} HKD`;
+        amount.textContent = `${daily.amount} ${analysisCurrency}`;
         const count = document.createElement("small");
         count.textContent = `${daily.count} ${data.basis === "offset" ? "条" : "笔"}`;
         cell.append(amount, count);
@@ -1111,7 +1118,7 @@ function renderAnalysisCalendar(data) {
 function renderHistogram(data) {
   const block = createAnalysisBlock("每日金额分布");
   block.append(createAnalysisSummary(
-    `单位：HKD；按每日${data.main_amount_label}合计自动分箱，区间边界为整数。`,
+    `单位：${analysisCurrency}；按每日${data.main_amount_label}合计自动分箱，区间边界为整数。`,
   ));
   const histogram = document.createElement("div");
   histogram.className = "analysis-histogram";
@@ -1119,7 +1126,7 @@ function renderHistogram(data) {
   for (const bin of data.histogram) {
     const item = document.createElement("div");
     item.className = "analysis-histogram-bin";
-    item.title = `${bin.start}-${bin.end} HKD：${bin.count} 天`;
+    item.title = `${bin.start}-${bin.end} ${analysisCurrency}：${bin.count} 天`;
     const count = document.createElement("strong");
     count.textContent = `${bin.count} 天`;
     const barArea = document.createElement("div");
@@ -1139,7 +1146,7 @@ function renderHistogram(data) {
 
 function renderWeekdayDistribution(data) {
   const block = createAnalysisBlock("星期分布");
-  block.append(createAnalysisSummary("按每天金额归集，金额单位为 HKD。"));
+  block.append(createAnalysisSummary(`按每天金额归集，金额单位为 ${analysisCurrency}。`));
   const grid = document.createElement("div");
   grid.className = "analysis-weekday-grid";
   for (const item of data.weekday_distribution) {
@@ -1149,7 +1156,7 @@ function renderWeekdayDistribution(data) {
     const amount = document.createElement("strong");
     const count = document.createElement("span");
     label.textContent = item.label;
-    amount.textContent = `${item.amount} HKD`;
+    amount.textContent = `${item.amount} ${analysisCurrency}`;
     count.textContent = `${item.active_day_count} 天`;
     weekday.append(label, amount, count);
     grid.append(weekday);
@@ -1180,7 +1187,7 @@ function createDistributionTable(title, records, amountLabel, includeAmountShare
   const body = document.createElement("tbody");
   for (const record of records) {
     const row = document.createElement("tr");
-    const values = [record.name, `${record.amount} HKD`];
+    const values = [record.name, `${record.amount} ${analysisCurrency}`];
     if (includeAmountShare) {
       values.push(record.amount_share === undefined ? "—" : `${record.amount_share}%`);
     }
@@ -1201,6 +1208,7 @@ function createDistributionTable(title, records, amountLabel, includeAmountShare
 }
 
 function renderTransactionAnalysis(data) {
+  analysisCurrency = data.currency_code || 'HKD';
   analysisContent.replaceChildren();
   analysisConstraint.hidden = true;
   if(selectedSearchBudgets().some(id=>Number(id)>0)&&data.allocation_warnings?.length)analysisContent.append(createAnalysisSummary('收入来源存在超配或无法核实的分配，未计入本图；请按上方来源提示核对，当前仅展示可核实部分。'));
@@ -1213,7 +1221,7 @@ function renderTransactionAnalysis(data) {
   const coverage = data.rate_coverage;
   const coverageParts = [
     data.basis === "offset" ? `符合条件 ${data.entry_count} 条统计记录，涉及 ${data.transaction_count} 笔原始流水` : `符合条件 ${data.matched_transaction_count} 笔`,
-    `原币 HKD ${coverage.direct_hkd_count} ${data.basis === "offset" ? "条记录" : "笔"}`,
+    `原币 ${analysisCurrency} ${coverage.direct_hkd_count} ${data.basis === "offset" ? "条记录" : "笔"}`,
     `当天汇率换算 ${coverage.exact_rate_count} ${data.basis === "offset" ? "条记录" : "笔"}`,
     `${data.basis === "offset" ? "含邻近汇率" : "邻近日期汇率换算"} ${coverage.nearest_rate_count} ${data.basis === "offset" ? "条记录" : "笔"}`,
   ];
@@ -1228,7 +1236,7 @@ function renderTransactionAnalysis(data) {
     const empty = document.createElement("div");
     empty.className = "empty-notice";
     empty.textContent =
-      `${coverageParts.join("；")}。没有可换算为 HKD 的流水，因此无法生成日历和统计。`;
+      `${coverageParts.join("；")}。没有可完整统计的 ${analysisCurrency} 金额，因此无法生成日历和统计。`;
     analysisContent.append(empty);
     analysisContent.hidden = false;
     return;
@@ -1242,16 +1250,16 @@ function renderTransactionAnalysis(data) {
   const metricGrid = document.createElement("div");
   metricGrid.className = "account-state-grid";
   const metrics = [
-    { label: "总金额", value: `${statistics.total_amount} HKD`, primary: true },
+    { label: "总金额", value: `${statistics.total_amount} ${analysisCurrency}`, primary: true },
     { label: data.basis === "offset" ? "纳入统计记录" : "纳入统计笔数", value: `${statistics.converted_transaction_count} ${data.basis === "offset" ? "条" : "笔"}` },
     { label: "有流水天数", value: `${statistics.active_day_count} / ${statistics.range_day_count} 天` },
-    { label: "范围日均", value: `${statistics.calendar_day_mean} HKD` },
-    { label: "有流水日均", value: `${statistics.active_day_mean} HKD` },
-    { label: "每日中位数", value: `${statistics.median_daily_amount} HKD` },
-    { label: "每日最小 / 最大", value: `${statistics.minimum_daily_amount} / ${statistics.maximum_daily_amount} HKD` },
-    { label: "每日总体标准差", value: `${statistics.population_daily_standard_deviation} HKD` },
-    { label: "每日总体方差", value: `${statistics.population_daily_variance} HKD^2` },
-    { label: "最高金额日", value: `${statistics.maximum_day_date} · ${statistics.maximum_day_amount} HKD` },
+    { label: "范围日均", value: `${statistics.calendar_day_mean} ${analysisCurrency}` },
+    { label: "有流水日均", value: `${statistics.active_day_mean} ${analysisCurrency}` },
+    { label: "每日中位数", value: `${statistics.median_daily_amount} ${analysisCurrency}` },
+    { label: "每日最小 / 最大", value: `${statistics.minimum_daily_amount} / ${statistics.maximum_daily_amount} ${analysisCurrency}` },
+    { label: "每日总体标准差", value: `${statistics.population_daily_standard_deviation} ${analysisCurrency}` },
+    { label: "每日总体方差", value: `${statistics.population_daily_variance} ${analysisCurrency}^2` },
+    { label: "最高金额日", value: `${statistics.maximum_day_date} · ${statistics.maximum_day_amount} ${analysisCurrency}` },
   ];
   for (const metric of metrics) {
     metricGrid.append(createAnalysisMetric(metric.label, metric.value, metric.primary));
@@ -1302,7 +1310,8 @@ async function loadTransactionAnalysis(serial = searchRequestId) {
     const data = await request(buildAnalysisPath());
     if (serial !== searchRequestId) return;
     renderTransactionAnalysis(data);
-    setStatus(analysisStatus, selectedSearchBudgets().some(id=>Number(id)>0)&&data.allocation_warnings?.length?'按 HKD 统计 · 分配来源待核实，仅显示已核实部分':data.budget_warnings?.length ? '按 HKD 统计 · 未包含跨预算待归属事项' : "已按 HKD 统计", "success");
+    const unit = data.amount_scope === 'native' ? `${data.currency_code} 原币` : '全部命中金额折算 HKD';
+    setStatus(analysisStatus, `已按 ${unit} 统计${data.allocation_warnings?.length ? ' · 收入分配待核实' : data.budget_warnings?.length ? ' · 未包含跨预算待归属事项' : ''}`, 'success');
   } catch (error) {
     if (serial !== searchRequestId) return;
     analysisConstraint.textContent = error.message;
@@ -1627,6 +1636,16 @@ async function initialize() {
     request("/api/categories?kind=income&include_inactive=true"),
   ]);
   state.accounts = accounts;
+  if (searchCurrency) {
+    try {
+      const currencies = await request('/api/currencies?include_inactive=true');
+      for (const c of currencies) {
+        const option = document.createElement('option'); option.value = c.code;
+        option.textContent = `${c.name} · ${c.code}${c.is_active ? '' : '（停用）'}`; searchCurrency.append(option);
+      }
+      searchCurrency.disabled = false;
+    } catch (error) { setStatus(searchStatus, `币种选项暂未加载：${error.message}，可继续查询全部币种。`, 'error'); }
+  }
   state.categories = [...expenseCategories, ...incomeCategories];
   setSelectOptions(detailAccountSelect, accounts, "选择账户", formatAccountName, true);
   setSelectOptions(searchAccountSelect, accounts, "全部账户", formatAccountName);
@@ -1736,6 +1755,7 @@ document.querySelector("#clear-search-filters").addEventListener("click", () => 
   }
   updateBudgetSummary();
   searchAccountSelect.value = "";
+  if (searchCurrency) searchCurrency.value = '';
   searchDates.reset();
   searchKeywordInput.value = "";
   searchAdjustmentOnlyInput.checked = false;

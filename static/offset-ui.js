@@ -36,16 +36,24 @@ window.OffsetUI = (() => {
     target.append(node('p', `${data.entry_count} 条统计记录，涉及 ${data.transaction_count} 笔原始流水；按已关联流水计算。`, 'analysis-summary'));
     window.IncomeAllocations?.renderTrace(target,data);
     const grid = node('div', '', 'metric-grid');
-    for (const v of data.valuations) {
+    for (const v of data.native_totals || data.valuations) {
       const card = node('article', '', 'metric-item');
-      card.append(node('h3', `${v.currency_code} · ${data.budget_complete===false?'预算统计未完整 · ':''}${v.complete ? '汇率完整' : '仅已核实部分'}`));
+      card.append(node('h3', `${v.currency_code} · ${data.native_totals ? '原币，未换算' : '全部折算'}${data.budget_complete===false?' · 预算统计未完整':''}${v.complete ? '' : ' · 仅已核实部分'}`));
       for (const [name, amount] of [['收入', v.income], ['支出', v.expense], ['结余', v.balance]]) {
         const row = node('div'); row.append(node('span', name), node('strong', amount)); card.append(row);
       }
-      if (!v.complete) card.append(node('p', `未纳入 ${v.excluded_count} 条 · ${v.missing_currencies.join('、')}`, 'error'));
+      if (!v.complete) card.append(node('p', `未纳入 ${v.excluded_count} 条 · ${(v.missing_currencies || []).join('、')}`, 'error'));
       grid.append(card);
     }
     target.append(grid);
+    if (data.native_totals) target.append(node('p', '各币种分别统计，不含其他币种折算；事项仍按最早成员日期归属，跨月时与原始流水月份可能不同。', 'analysis-summary'));
+    if (data.native_totals && data.valuations) {
+      const reference = node('details', '', 'offset-members');
+      reference.append(node('summary', '查看所选事项折算参考（包含其他币种，非原币账单）'));
+      for (const value of data.valuations) reference.append(node('p',
+        `折算 ${value.currency_code}：收入 ${value.income} / 支出 ${value.expense} / 结余 ${value.balance}${value.complete ? '' : '（未完整）'}`, 'analysis-summary'));
+      target.append(reference);
+    }
   }
   function members(entry, editTransaction) {
     const details = node('details', '', 'offset-members');
@@ -87,7 +95,7 @@ window.OffsetUI = (() => {
     );
     if(entry.allocation_basis){
       const allocated=node('span','所选预算分配：','offset-amounts');
-      allocated.append(net(entry,'CNY'),net(entry,'HKD'));cell.append(allocated);
+      for (const v of entry.native_amounts || []) allocated.append(node('span', `${v.amount ?? '未完整'} ${v.currency_code}（原币份额）`));cell.append(allocated);
     }
     const action = node('span', '', 'offset-transaction-action');
     if (editTransaction) {
@@ -108,24 +116,30 @@ window.OffsetUI = (() => {
     if (entry.entry_type === 'offset_group' && entry.entry_id) title.append(link(entry.entry_id, '编辑事项'));
     cell.append(title);
     const amounts = node('div', '', 'offset-amounts');
-    amounts.append(net(entry, 'CNY'), net(entry, 'HKD'));
+    for (const v of entry.native_amounts || []) amounts.append(node('span', `${v.amount ?? '未完整'} ${v.currency_code}（原币）`, Number(v.amount) < 0 ? 'negative-amount' : ''));
+    if (!entry.native_amounts) amounts.append(net(entry, 'CNY'), net(entry, 'HKD'));
     cell.append(amounts, node('p', entry.raw_totals.map(v => `${v.currency_code}：原始支出 ${v.expense} / 原始收入 ${v.income}`).join('；'), 'analysis-summary'));
-    if (entry.category_basis) cell.append(node('p', `上方仅计所选分类；完整事项净额：${Object.entries(entry.whole_valuations).map(([code,v]) => `${v.amount ?? '未完整'} ${code}`).join(' / ')}`, 'analysis-summary'));
+    if (entry.native_currency_code) cell.append(node('p', `只计 ${entry.native_currency_code} 原币金额，其他币种成员仅供追溯。`, 'analysis-summary'));
+    if (entry.category_basis) cell.append(node('p', `上方仅计所选分类；完整事项净额：${Object.entries(entry.whole_valuations).map(([code,v]) => `${v.amount ?? '未完整'} ${code}（全部折算）`).join(' / ')}`, 'analysis-summary'));
     if (entry.category_breakdown) {
       const details = node('details', '', 'offset-members'); details.append(node('summary', '查看分类净额与优惠分摊'));
-      details.append(node('p', '共享回款按原支出比例分摊；指定回款只冲减对应支出。金额按各自日期汇率换算，显示尾差统一分配。', 'analysis-summary'));
+      details.append(node('p', '按原币分别列出分类净额，不把其他币种回款换算后混入。共享回款按原支出比例分摊，指定回款只冲减对应支出。', 'analysis-summary'));
       const wrap = node('div', '', 'table-wrap'), table = node('table'), head = node('thead'), tr = node('tr'), body = node('tbody');
-      for (const label of ['分类', '原支出 CNY', '冲减 CNY', '净支出 CNY', '原支出 HKD', '冲减 HKD', '净支出 HKD']) tr.append(node('th', label));
+      const codes = Object.keys(entry.native_category_breakdown || {});
+      for (const label of ['分类', ...codes.map(code => `${code} 原币净支出`)]) tr.append(node('th', label));
       head.append(tr); table.append(head);
-      for (const row of entry.category_breakdown.CNY) {
-        const hkd = entry.category_breakdown.HKD.find(r => r.category_id === row.category_id), line = node('tr');
-        for (const value of [row.category_name + (entry.category_basis ? row.selected ? '（本次计入）' : '（未选）' : ''), row.gross, row.deduction, row.amount, hkd.gross, hkd.deduction, hkd.amount]) line.append(node('td', value ?? '未完整'));
+      for (const row of entry.native_category_breakdown?.[codes[0]] || []) {
+        const line = node('tr');
+        for (const value of [row.category_name + (entry.category_basis ? row.selected ? '（本次计入）' : '（未选）' : ''), ...codes.map(code => entry.native_category_breakdown[code].find(r => r.category_id === row.category_id)?.amount)]) line.append(node('td', value ?? '未完整'));
         body.append(line);
       }
       table.append(body); wrap.append(table); details.append(wrap); cell.append(details);
     }
     if (entry.note) cell.append(node('p', entry.note));
-    for (const [base,v] of Object.entries(entry.valuations)) cell.append(node('small', `${base}：${coverage(v)}`, 'offset-coverage'));
+    const converted = node('details', '', 'offset-members'); converted.append(node('summary', entry.category_basis ? '查看所选分类折算参考（含其他币种）' : '查看完整事项折算参考（含其他币种）'));
+    const convertedAmounts = node('div', '', 'offset-amounts'); convertedAmounts.append(net(entry, 'CNY'), net(entry, 'HKD')); converted.append(convertedAmounts);
+    for (const [base,v] of Object.entries(entry.valuations)) converted.append(node('small', `折算 ${base}：${coverage(v)}`, 'offset-coverage'));
+    cell.append(converted);
     cell.append(members(entry, editTransaction)); return cell;
   }
   return {node, request, link, net, summary, members, entryCell};

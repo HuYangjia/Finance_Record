@@ -405,6 +405,9 @@ def project_income_budget(c, entries, budget_system_ids):
             allocation_basis=True,
             income_allocations=selected,
         )
+        from app.native_cashflow import project_income_share
+        native = project_income_share(entry, selected, rates)
+        projected.update({k: native[k] for k in ('_native_amounts', '_native_parts')})
         projected['_valuations'] = {code:value_entry(dict(kind='income',members=synthetic),rates,code)
                                     for code in ('CNY','HKD')}
         invalid = next((r for r in selected if not r['source_complete']),None)

@@ -14,6 +14,7 @@ from app.budgets import (
     normalize_budget_filter_ids,
 )
 from app.offset_categories import category_parts, proportional, project_categories, public_breakdown, rounded_parts
+from app import native_cashflow
 
 
 def read_ledger(connection):
@@ -123,6 +124,7 @@ def make_entry(metadata, members, rates, entry_type='offset_group'):
         result['category_ids'] = [r['category_id'] for r in result['_category_parts']['HKD']]
         if len(result['category_ids']) > 1:
             result['category_name'] = '多分类'
+    native_cashflow.prepare(result, rates)
     return result
 
 
@@ -186,6 +188,9 @@ def serialize_entry(entry):
     }
     if entry.get('_category_parts'):
         result['category_breakdown'] = public_breakdown(entry)
+    result['native_amounts'] = native_cashflow.public_amounts(entry)
+    if entry.get('_category_parts'):
+        result['native_category_breakdown'] = native_cashflow.public_parts(entry)
     if entry.get('category_basis'):
         result['whole_valuations'] = {
             base: dict(available=value['amount'] is not None,
@@ -229,7 +234,7 @@ def entry_budget_ids(entry):
 
 def filter_entries(entries, start_date=None, end_date=None, transaction_types=None,
                    category_ids=None, involved_account_id=None, keyword=None, flagged_only=False,
-                   entry_type=None, budget_system_id=None, budget_system_ids=None, **_):
+                   entry_type=None, budget_system_id=None, budget_system_ids=None, currency_code=None, **_):
     selected_budgets = set(normalize_budget_filter_ids(budget_system_ids, budget_system_id))
     if entry_type not in (None, 'transaction', 'offset_group'):
         raise HTTPException(422, '统计记录类型不支持。')
@@ -245,6 +250,10 @@ def filter_entries(entries, start_date=None, end_date=None, transaction_types=No
             continue
         if transaction_types and entry['kind'] not in transaction_types:
             continue
+        if currency_code:
+            entry = native_cashflow.project_currency(entry, currency_code)
+            if entry is None:
+                continue
         if category_ids:
             entry = project_categories(entry, category_ids)
             if entry is None:
@@ -281,10 +290,11 @@ def summarize(entries):
     from app.income_allocations import allocation_metadata
     return {'available': True, 'entry_count': len(entries),
             'transaction_count': sum(e['transaction_count'] for e in entries), 'valuations': totals,
+            'native_totals': native_cashflow.summarize(entries), 'amount_scope': 'native',
             **allocation_metadata([r for e in entries for r in e.get('income_allocations',[])])}
 
 
-def analyze(entries, start_date, end_date, kind):
+def analyze(entries, start_date, end_date, kind, currency_code=None):
     validate_filters(start_date=start_date, end_date=end_date, transaction_types=[kind])
     if not start_date or not end_date:
         raise HTTPException(422, '请选择完整日期范围。')
@@ -296,7 +306,8 @@ def analyze(entries, start_date, end_date, kind):
     coverage = {'direct_hkd_count': 0, 'exact_rate_count': 0, 'nearest_rate_count': 0,
                 'excluded_count': 0, 'missing_currencies': set()}
     for entry in entries:
-        value = entry['_valuations']['HKD']
+        value = entry['_valuations']['HKD'] if not currency_code else dict(
+            amount=entry['_native_amounts'].get(currency_code), missing_currencies=[], coverage=dict(direct=1, exact=0, nearest=0))
         if value['amount'] is None:
             coverage['excluded_count'] += 1
             coverage['missing_currencies'].update(value['missing_currencies'])
@@ -306,7 +317,11 @@ def analyze(entries, start_date, end_date, kind):
         converted.append({'transaction_date': entry['statistics_date'], 'amount_hkd': value['amount'],
                           'category_name': entry['category_name'], 'direction': None,
                           'account_name': entry['involved_accounts'][0]['name'] if len(entry['involved_accounts']) == 1 else '多账户事项'})
-        parts = entry.get('_category_parts', {}).get('HKD', [dict(category_id=entry['category_id'], category_name=entry['category_name'], amount=value['amount'])])
+        parts = (entry['_native_parts'][currency_code] if currency_code else entry.get('_category_parts', {}).get('HKD',
+                 [dict(category_id=entry['category_id'], category_name=entry['category_name'], amount=value['amount'])]))
+        if any(p['amount'] is None for p in parts):
+            converted.pop(); coverage[status] -= 1; coverage['excluded_count'] += 1
+            continue
         for part in parts:
             if entry.get('category_basis') and part['category_id'] not in entry['selected_category_ids']:
                 continue
@@ -323,6 +338,7 @@ def analyze(entries, start_date, end_date, kind):
         **(dict(amount_share=format_decimal(category_totals[name]['amount'] * 100 / total, 1)) if show_share else {}))
         for name, amount in zip(names, rounded)]
     data.update(basis='offset', entry_count=len(entries), transaction_count=sum(e['transaction_count'] for e in entries),
+                currency_code=currency_code or 'HKD', amount_scope='native' if currency_code else 'converted',
                 main_amount_label='净支出' if kind == 'expense' else '净收入', account_label='涉及账户',
                 filters={'start_date': start_date, 'end_date': end_date})
     return data

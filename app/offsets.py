@@ -196,16 +196,18 @@ def get_group(group_id: int):
 
 def query_entries(start_date=None, end_date=None, transaction_types=None, category_ids=None,
                   involved_account_id=None, keyword=None, flagged_only=False, limit=50, offset=0,
-                  groups_only=False, entry_type=None, budget_system_id=None, budget_system_ids=None):
+                  groups_only=False, entry_type=None, budget_system_id=None, budget_system_ids=None, currency_code=None):
     selected_budgets = normalize_budget_filter_ids(budget_system_ids, budget_system_id)
     filters = dict(start_date=start_date, end_date=end_date, transaction_types=transaction_types or [],
                    category_ids=category_ids or [], involved_account_id=involved_account_id,
-                   keyword=keyword, flagged_only=flagged_only, entry_type=entry_type)
+                   keyword=keyword, flagged_only=flagged_only, entry_type=entry_type, currency_code=currency_code)
     validate_filters(**filters, limit=limit, offset=offset)
     with connect() as connection:
         connection.execute('BEGIN')
         if involved_account_id and not connection.execute('SELECT 1 FROM accounts WHERE id=?', (involved_account_id,)).fetchone():
             raise HTTPException(404, '账户不存在。')
+        if currency_code and not connection.execute('SELECT 1 FROM currencies WHERE code=?', (currency_code,)).fetchone():
+            raise HTTPException(422, '币种不存在。')
         entries = build_entries(*read_ledger(connection))
         from app.income_allocations import project_income_budget
         entries = project_income_budget(connection, entries, selected_budgets or None)
@@ -234,14 +236,14 @@ def search_personal(start_date: str | None = None, end_date: str | None = None,
                     flagged_only: bool = False, limit: int = 50, offset: int = 0, manual_adjustments_only: bool = False,
                     entry_type: Literal['transaction', 'offset_group'] | None = None,
                     budget_system_id: int | None = None,
-                    budget_system_ids: list[int] = Query(default=[])):
+                    budget_system_ids: list[int] = Query(default=[]), currency_code: str | None = None):
     if manual_adjustments_only:
         raise HTTPException(422, "冲销后收支不支持仅手工调整条件。")
     types = transaction_types if isinstance(transaction_types, list) else []
     categories = category_ids if isinstance(category_ids, list) else []
     entries, filters = query_entries(start_date, end_date, types, categories, involved_account_id,
                                       keyword, flagged_only, limit, offset, entry_type=entry_type,
-                                      budget_system_id=budget_system_id, budget_system_ids=budget_system_ids)
+                                      budget_system_id=budget_system_id, budget_system_ids=budget_system_ids, currency_code=currency_code)
     return {'basis': 'offset', 'filters': filters, 'budget_warnings': filters['budget_warnings'], 'pagination': {'limit': limit, 'offset': offset, 'total': len(entries)},
             'entries': [serialize_entry(e) for e in entries[offset:offset+limit]],
             'summary': {**summarize(entries), 'budget_complete': not filters['budget_warnings'] and
@@ -266,15 +268,15 @@ def analyze_personal(start_date: str, end_date: str, transaction_type: Literal['
                      keyword: str | None = None, flagged_only: bool = False, manual_adjustments_only: bool = False,
                      entry_type: Literal['transaction', 'offset_group'] | None = None,
                      budget_system_id: int | None = None,
-                     budget_system_ids: list[int] = Query(default=[])):
+                     budget_system_ids: list[int] = Query(default=[]), currency_code: str | None = None):
     if manual_adjustments_only:
         raise HTTPException(422, "冲销后收支不支持仅手工调整条件。")
     categories = category_ids if isinstance(category_ids, list) else []
     entries, filters = query_entries(start_date, end_date, [transaction_type], categories,
                                      involved_account_id, keyword, flagged_only, entry_type=entry_type,
-                                     budget_system_id=budget_system_id, budget_system_ids=budget_system_ids)
+                                     budget_system_id=budget_system_id, budget_system_ids=budget_system_ids, currency_code=currency_code)
     from app.income_allocations import allocation_metadata
-    return {**analyze(entries, start_date, end_date, transaction_type), 'budget_warnings': filters['budget_warnings'],
+    return {**analyze(entries, start_date, end_date, transaction_type, currency_code), 'budget_warnings': filters['budget_warnings'],
             **allocation_metadata([r for e in entries for r in e.get('income_allocations',[])])}
 
 
