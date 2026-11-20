@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.database import connect
 from app.budgets import config_data, currency, money, minor, mutation, require_system, valid_month
 from app.budget_execution import execution_report, member_amount
+from app.budget_calculation import get_calculation
 from app.personal_cashflow import build_entries, read_ledger
 from app.budget_events import expense_entries
 
@@ -38,19 +39,22 @@ def require_storage(c, storage_id, allow_inactive=False):
         raise HTTPException(422,'请选择有效的末级存储方式；停用项目仍可保留历史或调出已有额度。')
 
 
-def transfers_data(c, system_id):
+def transfers_data(c, system_id, *, config=None):
     rows = [dict(r) for r in c.execute('SELECT * FROM budget_storage_transfers WHERE budget_system_id=? ORDER BY month,id',(system_id,))]
-    names = {r['id']:r['path'] for r in config_data(c)['storage']}
+    if config is None:
+        config = config_data(c)
+    names = {r['id']:r['path'] for r in config['storage']}
     for row in rows:
         row.update(amount=money(row['amount_minor'],currency(c,row['currency_code'])),
                    source_name=names.get(row['source_id'],'待分配'),destination_name=names.get(row['destination_id'],'待分配'))
     return rows
 
 
-def storage_report(c, end_month, system_id=None, currency_code=None, execution=None, details=False):
+def storage_report(c, end_month, system_id=None, currency_code=None, execution=None, details=False, *, calculation=None):
     valid_month(end_month)
-    config = config_data(c)
-    execution = execution or execution_report(c,end_month,system_id=system_id,currency_code=currency_code)
+    calculation = get_calculation(c,calculation)
+    config = calculation.config
+    execution = execution or execution_report(c,end_month,system_id=system_id,currency_code=currency_code,calculation=calculation)
     systems = {s['id']:s for s in config['systems']}
     storage = {s['id']:s for s in config['storage']}
     cash_root = next((s for s in config['storage'] if s['parent_id'] is None and s['name'].strip()=='活期'
@@ -66,8 +70,8 @@ def storage_report(c, end_month, system_id=None, currency_code=None, execution=N
     defaults = {r['budget_system_id']:r['storage_method_id'] for r in c.execute('SELECT * FROM budget_storage_defaults')}
     overrides = {(r['budget_system_id'],'transaction' if r['transaction_id'] else 'offset_group',r['transaction_id'] or r['group_id']):r['storage_method_id']
                  for r in c.execute('SELECT * FROM budget_storage_expenses')}
-    records,groups,rates = read_ledger(c)
-    entries = list(expense_entries(build_entries(records,groups,rates)))
+    rates = calculation.rates
+    entries = calculation.expenses
     plans = [dict(r) for r in c.execute('SELECT * FROM budget_plans WHERE month<=?',(end_month,))]
     items = defaultdict(list)
     for row in c.execute('SELECT * FROM budget_plan_items'):
@@ -84,7 +88,7 @@ def storage_report(c, end_month, system_id=None, currency_code=None, execution=N
             balances[storage_key(used_default)] += 0
         system_plans = [p for p in plans if p['budget_system_id']==sid and
                         p['currency_code']==code and origin<=p['month']<=end_month]
-        moves = transfers_data(c,sid)
+        moves = transfers_data(c,sid,config=config)
         system_moves = [m for m in moves if origin<=m['month']<=end_month and m['currency_code']==code]
         monthly = defaultdict(list); expense_rows = []; rounded = defaultdict(list)
         for entry in entries:
@@ -199,10 +203,11 @@ def storage_report(c, end_month, system_id=None, currency_code=None, execution=N
 def storage_detail(system_id: int, month: str):
     with connect() as c:
         c.execute('BEGIN')
-        report = storage_report(c,month,system_id=system_id,details=True)
+        calculation = get_calculation(c)
+        report = storage_report(c,month,system_id=system_id,details=True,calculation=calculation)
         if not report['rows']:
             raise HTTPException(404,'此预算暂无可查看的计划或消费。')
-        return dict(row=report['rows'][0],config=config_data(c))
+        return dict(row=report['rows'][0],config=calculation.config)
 
 
 class StorageWrite(BaseModel):

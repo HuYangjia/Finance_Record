@@ -24,11 +24,12 @@ def guard_reference(c, kind, entry_id):
 
 
 class FundingCatalog:
-    def __init__(self, c):
-        from app.personal_cashflow import build_entries, read_ledger
+    def __init__(self, c, *, calculation=None):
+        from app.budget_calculation import get_calculation
+        calculation = get_calculation(c, calculation)
         self.c = c
-        records, groups, self.rates = read_ledger(c)
-        self.entries = {(e['entry_type'], e['entry_id']): e for e in build_entries(records, groups, self.rates)
+        self.rates = calculation.rates
+        self.entries = {(e['entry_type'], e['entry_id']): e for e in calculation.entries
                         if e['kind'] == 'income'}
         self.places = {r['code']: r['decimal_places'] for r in c.execute('SELECT code,decimal_places FROM currencies')}
         self.bindings = [dict(r) for r in c.execute('''SELECT f.*,p.total_minor,p.currency_code AS plan_currency,

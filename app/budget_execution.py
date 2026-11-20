@@ -4,10 +4,9 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException
 
-from app.budgets import config_data, money, require_system, valid_month
-from app.personal_cashflow import build_entries, read_ledger
+from app.budgets import money, require_system, valid_month
+from app.budget_calculation import get_calculation
 from app.reporting import amount_to_budget_currency
-from app.budget_events import expense_entries
 
 
 def month_index(month):
@@ -23,11 +22,12 @@ def member_amount(member, rates, target):
     return amount_to_budget_currency(member, rates, target)
 
 
-def execution_report(c, end_month, start_month=None, system_id=None, currency_code=None):
+def execution_report(c, end_month, start_month=None, system_id=None, currency_code=None, *, calculation=None):
     valid_month(end_month); start_month=valid_month(start_month or end_month)
     if start_month>end_month or month_index(end_month)-month_index(start_month)>=120:
         raise HTTPException(422,'执行历史请选择不超过 120 个月的有效区间；更早结余仍会自动承接。')
-    config=config_data(c)
+    calculation=get_calculation(c,calculation)
+    config=calculation.config
     if system_id is not None:
         require_system(c,system_id,True)
     if currency_code is not None and not any(r['code']==currency_code for r in config['currencies']):
@@ -38,9 +38,9 @@ def execution_report(c, end_month, start_month=None, system_id=None, currency_co
     for row in c.execute('''SELECT p.*,COALESCE(p.total_minor,(SELECT SUM(i.amount_minor)
             FROM budget_plan_items i WHERE i.plan_id=p.id),0) AS budget_total FROM budget_plans p'''):
         plans[row['budget_system_id']].append(dict(row))
-    records,groups,rates=read_ledger(c)
+    rates=calculation.rates
     expenses=defaultdict(list)
-    for entry in expense_entries(build_entries(records,groups,rates)):
+    for entry in calculation.expenses:
         targets = ({m['effective_budget_system_id'] for m in entry['members'] if m['transaction_type']=='expense'}
                    if entry['budget_mixed'] else {entry['budget_system_id']})
         for target in targets:
@@ -48,8 +48,8 @@ def execution_report(c, end_month, start_month=None, system_id=None, currency_co
                 expenses[target].append(entry)
     wanted=[month_name(i) for i in range(month_index(start_month),month_index(end_month)+1)]
     rows=[]
-    from app.budget_funding import FundingCatalog, reference
-    funding=FundingCatalog(c)
+    from app.budget_funding import reference
+    funding=calculation.funding
     funding_issues=defaultdict(list)
     for binding in funding.bindings:
         source=funding.describe(*reference(binding))

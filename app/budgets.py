@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.database import ROOT_DIR, connect, create_backup
+from app.budget_calculation import BudgetCalculation
 
 router = APIRouter()
 COLLECTIONS = {'systems': 'budget_systems', 'storage': 'budget_storage_methods',
@@ -674,7 +675,8 @@ def budget_overview(end_month: str, start_month: str = '0001-01', system_id: int
         raise HTTPException(422, '累计起始月不能晚于编制月份。')
     with connect() as c:
         c.execute('BEGIN')
-        config = config_data(c)
+        calculation = BudgetCalculation(c)
+        config = calculation.config
         if system_id is not None:
             if system_id <= 0:
                 raise HTTPException(422, '请选择有效的预算用途。')
@@ -704,8 +706,7 @@ def budget_overview(end_month: str, start_month: str = '0001-01', system_id: int
                         system_name=systems[item['budget_system_id']]['name'],storage_path=storage[item['storage_method_id']]['path'],
                         storage_root=storage_parent['path'],
                         legacy_purpose=purposes[item['purpose_id']]['path'] if not purposes[item['purpose_id']]['is_placeholder'] else '')
-        from app.budget_funding import FundingCatalog
-        funding=FundingCatalog(c)
+        funding=calculation.funding
         reviews={r['plan_id']:r['plan_version'] for r in c.execute('SELECT * FROM budget_legacy_reviews')}
         for p in plans:
             places=currencies[p['currency_code']]['decimal_places']
@@ -724,9 +725,9 @@ def budget_overview(end_month: str, start_month: str = '0001-01', system_id: int
                 return {key:money(sum(p[key+'_minor'] for p in rows),places) for key in ('budget_total','allocated','unallocated')}
             blocks.append(dict(currency_code=code,decimal_places=places,monthly=sums([p for p in selected if p['month']==end_month]),cumulative=sums(selected)))
         from app.budget_execution import execution_report
-        execution=execution_report(c,end_month,system_id=system_id,currency_code=currency_code)
+        execution=execution_report(c,end_month,system_id=system_id,currency_code=currency_code,calculation=calculation)
         from app.budget_storage import storage_report
-        storage=storage_report(c,end_month,system_id,currency_code,execution)
+        storage=storage_report(c,end_month,system_id,currency_code,execution,calculation=calculation)
         return dict(start_month=start_month,end_month=end_month,plans=plans,currencies=blocks,items=items,execution=execution,storage=storage)
 
 

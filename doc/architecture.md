@@ -25,6 +25,8 @@ Excel 不再承担编辑职责，只用于查看、分享和归档。数据库�
 
 数据库连接统一使用 `ClosingConnection`，上下文提交或回滚后明确关闭；迁移与备份连接同样释放。`create_backup` 仅从已存在账本生成只读源快照，初始化由启动或显式命令负责，不再在每次备份中重复检查迁移。规则与验证见 [write-reliability.md](write-reliability.md)。
 
+预算报告通过 `app/budget_calculation.py` 的 `BudgetCalculation` 在同一个读取事务内复用配置、完整账本、汇率、冲销事项、消费投影及 `FundingCatalog`。概览将资料传给执行与存储报告；独立报告自行建立资料，Excel 概览沿用同一入口。共享对象仅在本次计算中使用，不跨请求或写入保留，报告输出不修改共享输入。规则与性能验证见 [预算设计](budget-and-fund-allocation-design.md)。
+
 首页记账通过可选 UUID `request_id` 识别重试。`app/entry_requests.py` 在备份前查回执、取得写锁后复查，并将 `entry_requests` 的请求摘要及成功响应与真实流水／收入分配同事务写入；相同编号不同内容返回冲突，已有回执不重复备份或写账。`static/entry-requests.js` 保留当前标签页待确认请求，`app.js` 提供恢复与重试入口。回执不参与统计，不因流水修改或删除而移除；首次升级先备份 `finance-pre-entry-requests-*.db`。
 
 ## 数据对象
