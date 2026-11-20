@@ -11,7 +11,6 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
-from openpyxl import Workbook
 from pydantic import BaseModel, Field
 
 from app.database import ROOT_DIR, connect, create_backup
@@ -741,6 +740,8 @@ def budget_execution(end_month: str, start_month: str | None = None, system_id: 
 
 @router.get('/api/budget/overview.xlsx')
 def budget_overview_export(end_month: str, start_month: str = '0001-01', system_id: int | None = None, currency_code: str | None = None):
+    from openpyxl import Workbook
+
     data=budget_overview(end_month,start_month,system_id,currency_code)
     def safe(value):
         return "'"+value if isinstance(value,str) and value.startswith(('=','+','-','@')) else value
@@ -846,6 +847,8 @@ def budget_summary(system_id: int, end_month: str, currency_code: str, start_mon
 
 @router.get('/api/budget/export.xlsx')
 def budget_export(system_id: int, end_month: str, currency_code: str, start_month: str='0001-01'):
+    from openpyxl import Workbook
+
     data = budget_summary(system_id,end_month,currency_code,start_month)
     book=Workbook(); sheet=book.active; sheet.title='预算计划'
     def safe(value):

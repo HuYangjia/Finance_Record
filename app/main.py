@@ -6,13 +6,16 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 import json
+import logging
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 from urllib.error import URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
+from anyio import create_task_group, to_thread
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -103,6 +106,7 @@ FREQUENT_ACCOUNT_ACTIVITY_KEYS = (
     "movement_source",
     "movement_destination",
 )
+logger = logging.getLogger("uvicorn.error")
 
 
 def transaction_type_label(
@@ -116,17 +120,22 @@ def transaction_type_label(
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    started = perf_counter()
     initialize_database()
-    try:
-        sync_daily_cny_exchange_rates(today_in_shanghai())
-    except Exception as exc:
-        print(f"汇率自动同步失败：{exc}")
+    logger.info("数据库初始化完成（%.2f 秒）", perf_counter() - started)
+    started = perf_counter()
     try:
         with connect() as connection:
             ensure_daily_frequent_snapshot(connection, today_in_shanghai())
+        logger.info("常用项每日统计完成（%.2f 秒）", perf_counter() - started)
     except Exception as exc:
-        print(f"常用项每日统计失败：{exc}")
-    yield
+        logger.warning("常用项每日统计失败：%s", exc)
+    async with create_task_group() as background:
+        background.start_soon(sync_startup_cny_exchange_rates)
+        try:
+            yield
+        finally:
+            background.cancel_scope.cancel()
 
 
 app = FastAPI(title="个人财务账本", lifespan=lifespan)
@@ -400,27 +409,62 @@ def upsert_daily_cny_exchange_rate(
     ).fetchone()
 
 
-def sync_daily_cny_exchange_rates(rate_date: date, force: bool = False) -> dict[str, Any]:
-    requested_date = rate_date.isoformat()
+def cached_cny_exchange_rate(requested_date: str):
     with connect() as connection:
-        existing = connection.execute(
+        return connection.execute(
             "SELECT * FROM daily_cny_exchange_rates WHERE rate_date = ?",
             (requested_date,),
         ).fetchone()
+
+
+def save_synced_cny_exchange_rate(
+    requested_date: str, fetched: dict[str, Any], force: bool = False,
+) -> dict[str, Any]:
+    with connect() as connection:
+        # A manual edit or another sync may have finished while the network was slow.
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT * FROM daily_cny_exchange_rates WHERE rate_date = ?",
+            (requested_date,),
+        ).fetchone()
+        if row is None or force:
+            row = upsert_daily_cny_exchange_rate(
+                connection,
+                rate_date=requested_date,
+                usd_cny_rate=fetched["usd_cny_rate"],
+                hkd_cny_rate=fetched["hkd_cny_rate"],
+                source=fetched["source"],
+                market_date=fetched["market_date"],
+            )
+    return serialize_daily_cny_exchange_rate(row)
+
+
+def sync_daily_cny_exchange_rates(rate_date: date, force: bool = False) -> dict[str, Any]:
+    requested_date = rate_date.isoformat()
+    existing = cached_cny_exchange_rate(requested_date)
     if existing is not None and not force:
         return serialize_daily_cny_exchange_rate(existing)
-
     fetched = fetch_public_cny_rates(rate_date)
-    with connect() as connection:
-        row = upsert_daily_cny_exchange_rate(
-            connection,
-            rate_date=requested_date,
-            usd_cny_rate=fetched["usd_cny_rate"],
-            hkd_cny_rate=fetched["hkd_cny_rate"],
-            source=fetched["source"],
-            market_date=fetched["market_date"],
+    return save_synced_cny_exchange_rate(requested_date, fetched, force)
+
+
+async def sync_startup_cny_exchange_rates() -> None:
+    started = perf_counter()
+    try:
+        rate_date = today_in_shanghai()
+        requested_date = rate_date.isoformat()
+        if cached_cny_exchange_rate(requested_date) is not None:
+            logger.info("今日汇率已缓存，跳过自动联网")
+            return
+        logger.info("正在后台同步今日汇率，记账服务无需等待")
+        # Only fetch in the worker: cancellation must never leave a database writer.
+        fetched = await to_thread.run_sync(
+            fetch_public_cny_rates, rate_date, abandon_on_cancel=True,
         )
-    return serialize_daily_cny_exchange_rate(row)
+        save_synced_cny_exchange_rate(requested_date, fetched)
+        logger.info("后台汇率同步完成（%.2f 秒）", perf_counter() - started)
+    except Exception as exc:
+        logger.warning("后台汇率同步失败（%.2f 秒）：%s", perf_counter() - started, exc)
 
 
 def validate_month(month: str) -> str:
