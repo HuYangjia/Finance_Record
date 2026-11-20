@@ -136,6 +136,15 @@ CREATE INDEX IF NOT EXISTS transactions_destination_index
 CREATE INDEX IF NOT EXISTS transactions_category_index
     ON transactions(category_id);
 
+-- Receipts survive edits/deletion of the original transaction, preventing re-creation.
+CREATE TABLE IF NOT EXISTS entry_requests (
+    request_id TEXT PRIMARY KEY,
+    operation TEXT NOT NULL CHECK (operation IN ('expense', 'income', 'transfer')),
+    fingerprint TEXT NOT NULL,
+    response_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS transaction_flags (
     id INTEGER PRIMARY KEY,
     transaction_id INTEGER NOT NULL UNIQUE

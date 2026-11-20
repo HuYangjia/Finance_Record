@@ -74,6 +74,54 @@ for (const mode of ['expense','income']) {
 const incomeAllocationEntry=IncomeAllocations.entry(forms.income.querySelector('.form-grid'),()=>state.budgetConfig,
   document.getElementById('income-budget-system'),()=>accountById(incomeAccountSelect.value)?.currency_code||'CNY');
 
+const recoveryBox = document.createElement('section');
+recoveryBox.id='entry-recovery';recoveryBox.className='empty-notice';recoveryBox.hidden=true;
+const recoveryTitle=document.createElement('strong'),recoveryDetail=document.createElement('p');
+const recoveryHelp=document.createElement('p'),recoveryActions=document.createElement('div');
+recoveryTitle.textContent='有一笔记录需要确认保存结果';recoveryActions.className='form-actions';
+const recoveryRetry=document.createElement('button'),recoveryLink=document.createElement('a');
+recoveryRetry.type='button';recoveryRetry.textContent='重试并确认';recoveryRetry.onclick=()=>savePendingEntry(state.mode);
+recoveryLink.href='/accounts';recoveryLink.target='_blank';recoveryLink.rel='noopener';recoveryLink.textContent='查看流水';
+recoveryActions.append(recoveryRetry,recoveryLink);recoveryBox.append(recoveryTitle,recoveryDetail,recoveryHelp,recoveryActions);
+document.querySelector('.entry-description').after(recoveryBox);
+
+function renderRecovery() {
+  const pending=EntryRequests.get(state.mode);
+  recoveryBox.hidden=!pending;
+  for(const [mode,target] of Object.entries(forms))target.inert=state.saving.has(mode)||Boolean(EntryRequests.get(mode));
+  if(!pending)return;
+  const p=pending.payload,account=accountById(p.source_account_id||p.destination_account_id);
+  recoveryDetail.textContent=`${p.transaction_date} · ${account?.name||'原选择账户'} · ${p.amount||p.outflow_amount} ${account?.currency_code||''}${p.note?' · '+p.note:''}`;
+  recoveryHelp.textContent='将按原内容重试，已保存的不会重复记账。确认前暂停编辑这一笔，其他记账模式仍可使用。'+
+    (pending.persistent?'刷新页面后也可继续确认。':'当前浏览器无法保留刷新后的重试信息，请在本页完成确认。');
+  recoveryRetry.disabled=state.saving.has(state.mode);
+}
+
+function restorePendingEntries() {
+  const pendingModes=Object.keys(forms).filter(mode=>EntryRequests.get(mode));
+  const selected=state.mode;
+  for(const mode of pendingModes){
+    setMode(mode);
+    const p=EntryRequests.get(mode).payload;
+    dateInput.value=p.transaction_date;noteInput.value=p.note||'';
+    if(mode==='transfer'){
+      transferSourceSelect.value=String(p.source_account_id);transferDestinationSelect.value=String(p.destination_account_id);
+      transferOutflowInput.value=p.outflow_amount;updateTransferAmounts();
+      if(p.inflow_amount!=null)transferInflowInput.value=p.inflow_amount;
+    }else{
+      const income=mode==='income';
+      (income?incomeAccountSelect:expenseAccountSelect).value=String(income?p.destination_account_id:p.source_account_id);
+      (income?incomeCategorySelect:expenseCategorySelect).value=String(p.category_id);
+      (income?incomeAmountInput:expenseAmountInput).value=p.amount;counterpartyInput.value=p.counterparty||'';
+      document.getElementById(`${mode}-budget-system`).value=p.budget_system_id==null?'':String(p.budget_system_id);
+      state.manualBudget[mode]=true;
+      if(income)incomeAllocationEntry.restore(p.budget_allocations||[]);
+    }
+    refreshPickers();
+  }
+  setMode(pendingModes.includes(selected)?selected:pendingModes[0]||selected);
+}
+
 function resolveBudget(mode) {
   const config=state.budgetConfig;if(!config)return;
   const select=document.getElementById(`${mode}-budget-system`),hint=document.getElementById(`${mode}-budget-hint`);
@@ -281,8 +329,10 @@ function refreshSubmitState() {
   const accountRequirement = state.mode === "transfer" ? 2 : 1;
   submitButton.disabled =
     state.saving.has(state.mode) ||
+    Boolean(EntryRequests.get(state.mode)) ||
     state.accounts.length < accountRequirement ||
     (state.mode !== "transfer" && categories.length === 0);
+  renderRecovery();
 }
 
 function hasShortcutDraft(mode) {
@@ -341,6 +391,9 @@ async function loadEntryShortcuts() {
 function applyQuickAction(actionId) {
   const action = state.entryShortcuts.find((shortcut) => shortcut.id === Number(actionId));
   if(action && state.saving.has(action.mode))return;
+  if(action && EntryRequests.get(action.mode)){
+    setMode(action.mode);setStatus('请先确认上一笔记录，再使用便捷操作。','error');return;
+  }
   if (!action) {
     setStatus("快捷操作不存在。", "error");
     return;
@@ -490,6 +543,10 @@ function buildPayload() {
 }
 
 function successMessage(mode, result) {
+  if(result.replayed){
+    if(mode==='transfer')return `已确认上次记录，未重复记账 · 保存时${result.source_account_name}余额 ${result.source_account_balance} ${result.source_currency_code}，${result.destination_account_name}余额 ${result.destination_account_balance} ${result.destination_currency_code}`;
+    return `已确认上次记录，未重复记账 · ${result.amount} ${result.currency_code} · 保存时${result.account_name}余额 ${result.account_balance} ${result.currency_code}`;
+  }
   if (mode === "transfer") {
     const movement = `${result.outflow_amount} ${result.source_currency_code} → ${result.inflow_amount} ${result.destination_currency_code}`;
     const sourceBalance = `${result.source_account_name}余额 ${result.source_account_balance} ${result.source_currency_code}`;
@@ -518,36 +575,40 @@ transferSourceSelect.addEventListener("change", updateTransferAmounts);
 transferDestinationSelect.addEventListener("change", updateTransferAmounts);
 transferOutflowInput.addEventListener("input", updateTransferAmounts);
 
-for (const [mode, target] of Object.entries(forms)) target.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (mode!==state.mode || state.saving.has(mode))return;
-  setStatus("");
-  if (!window.validateFrequentPickers(form) || !form.reportValidity()) {
-    return;
-  }
-
-  submitButton.disabled = true;
+async function savePendingEntry(mode) {
+  if(state.saving.has(mode)||!EntryRequests.get(mode))return;
+  const target=forms[mode];
   state.saving.add(mode);
-  // Keep this mode's draft stable while the request is in flight.
-  target.inert=true;
-  const { endpoint, payload } = buildPayload();
-
+  if(state.mode===mode)setStatus('正在保存并确认结果…');
+  refreshSubmitState();
   try {
-    const result = await request(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const result = await EntryRequests.send(mode);
+    EntryRequests.clear(mode);
     const viewing=state.mode;setMode(mode);
     setStatus(successMessage(mode, result), "success");
     resetTransactionForm({ preserveExpenseAccount: mode === "expense" });
     setMode(viewing);
   } catch (error) {
-    state.statuses[mode]={message:error.message,type:'error'};
-    if(state.mode===mode)setStatus(error.message,'error');
+    if(error.rejected)EntryRequests.clear(mode);
+    const message=error.rejected?error.message:'尚未确认保存结果，请使用“重试并确认”，避免重复记账。';
+    state.statuses[mode]={message,type:'error'};
+    if(state.mode===mode)setStatus(message,'error');
   } finally {
-    state.saving.delete(mode);target.inert=false;
+    state.saving.delete(mode);target.inert=Boolean(EntryRequests.get(mode));
     refreshSubmitState();
+  }
+}
+
+for (const [mode, target] of Object.entries(forms)) target.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if(mode!==state.mode || state.saving.has(mode) || EntryRequests.get(mode))return;
+  if(!window.validateFrequentPickers(target)||!target.reportValidity())return;
+  try {
+    const {endpoint,payload}=buildPayload();
+    EntryRequests.prepare(mode,endpoint,payload);
+    await savePendingEntry(mode);
+  } catch(error) {
+    setStatus(error.message,'error');refreshSubmitState();
   }
 });
 
@@ -557,6 +618,7 @@ async function initialize() {
     await loadFormOptions();
     await loadBudgetOptions();
     await loadEntryShortcuts();
+    restorePendingEntries();
   } catch (error) {
     setStatus(error.message, "error");
   }

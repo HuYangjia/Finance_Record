@@ -79,7 +79,7 @@ class DatabaseLifecycleTest(unittest.TestCase):
 
     def test_backup_failure_prevents_business_write(self):
         database.initialize_database()
-        with patch("app.main.create_backup", side_effect=OSError("disk full")):
+        with patch("app.entry_requests.create_backup", side_effect=OSError("disk full")):
             with self.assertRaisesRegex(OSError, "disk full"):
                 main.create_expense(main.ExpenseCreate(source_account_id=1, category_id=1, amount="1"))
         with database.connect() as check:

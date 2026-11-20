@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from uuid import UUID
 from urllib.error import URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -22,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.database import ROOT_DIR, connect, create_backup, initialize_database
+from app.entry_requests import entry_submission
 from app.term_deposits import (
     router as term_deposits_router,
     guard_account as guard_term_account,
@@ -153,7 +155,11 @@ def offsets_page():
     return FileResponse(STATIC_DIR / "offsets.html", headers={"Cache-Control": "no-store"})
 
 
-class ExpenseCreate(BaseModel):
+class EntryCreate(BaseModel):
+    request_id: UUID | None = None
+
+
+class ExpenseCreate(EntryCreate):
     budget_system_id: int | None = Field(default=None, gt=0)
     transaction_date: date = Field(default_factory=date.today)
     source_account_id: int
@@ -163,7 +169,7 @@ class ExpenseCreate(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
-class IncomeCreate(BaseModel):
+class IncomeCreate(EntryCreate):
     budget_system_id: int | None = Field(default=None, gt=0)
     budget_allocations: list[AllocationItem] | None = Field(default=None, max_length=300)
     transaction_date: date = Field(default_factory=date.today)
@@ -174,7 +180,7 @@ class IncomeCreate(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
-class TransferCreate(BaseModel):
+class TransferCreate(EntryCreate):
     transaction_date: date = Field(default_factory=date.today)
     source_account_id: int
     destination_account_id: int
@@ -2936,9 +2942,10 @@ def list_categories(
 
 @app.post("/api/expenses", status_code=201)
 def create_expense(expense: ExpenseCreate):
-    create_backup()
-
-    with connect() as connection:
+    with entry_submission("expense", expense) as submission:
+        if submission.replay is not None:
+            return submission.replay
+        connection = submission.connection
         require_system(connection, expense.budget_system_id)
         account = get_active_account(connection, expense.source_account_id, "支付账户")
         category = get_active_category(connection, expense.category_id, "expense")
@@ -2969,27 +2976,30 @@ def create_expense(expense: ExpenseCreate):
         )
         updated_account = get_account_balance_row(connection, expense.source_account_id)
 
-    return {
-        "id": cursor.lastrowid,
-        "transaction_date": expense.transaction_date.isoformat(),
-        "account_name": account["name"],
-        "currency_code": account["currency_code"],
-        "amount": format_minor(amount_minor, account["decimal_places"]),
-        "account_balance": format_minor(
-            updated_account["balance_minor"], account["decimal_places"]
-        ),
-        "category_name": category["name"],
-        "budget_system_id": expense.budget_system_id,
-    }
+        result = {
+            "id": cursor.lastrowid,
+            "transaction_date": expense.transaction_date.isoformat(),
+            "account_name": account["name"],
+            "currency_code": account["currency_code"],
+            "amount": format_minor(amount_minor, account["decimal_places"]),
+            "account_balance": format_minor(
+                updated_account["balance_minor"], account["decimal_places"]
+            ),
+            "category_name": category["name"],
+            "budget_system_id": expense.budget_system_id,
+        }
+        submission.result = result
+        return result
 
 
 @app.post("/api/incomes", status_code=201)
 def create_income(income: IncomeCreate):
-    backup_path = create_backup()
     budget_tag = income.budget_system_id if income.budget_allocations is None else None
-
-    with connect() as connection:
-        connection.execute('BEGIN IMMEDIATE')
+    with entry_submission("income", income) as submission:
+        if submission.replay is not None:
+            return submission.replay
+        connection = submission.connection
+        backup_path = submission.backup
         require_system(connection, budget_tag)
         account = get_active_account(connection, income.destination_account_id, "到账账户")
         category = get_active_category(connection, income.category_id, "income")
@@ -3027,28 +3037,30 @@ def create_income(income: IncomeCreate):
                                    'SELECT * FROM budget_income_allocations WHERE transaction_id=?',(cursor.lastrowid,))]))
         updated_account = get_account_balance_row(connection, income.destination_account_id)
 
-    return {
-        "id": cursor.lastrowid,
-        "transaction_date": income.transaction_date.isoformat(),
-        "account_name": account["name"],
-        "currency_code": account["currency_code"],
-        "amount": format_minor(amount_minor, account["decimal_places"]),
-        "account_balance": format_minor(
-            updated_account["balance_minor"], account["decimal_places"]
-        ),
-        "category_name": category["name"],
-        "budget_system_id": budget_tag,
-    }
+        result = {
+            "id": cursor.lastrowid,
+            "transaction_date": income.transaction_date.isoformat(),
+            "account_name": account["name"],
+            "currency_code": account["currency_code"],
+            "amount": format_minor(amount_minor, account["decimal_places"]),
+            "account_balance": format_minor(
+                updated_account["balance_minor"], account["decimal_places"]
+            ),
+            "category_name": category["name"],
+            "budget_system_id": budget_tag,
+        }
+        submission.result = result
+        return result
 
 
 @app.post("/api/transfers", status_code=201)
 def create_transfer(transfer: TransferCreate):
-    if transfer.source_account_id == transfer.destination_account_id:
-        raise HTTPException(status_code=422, detail="转出和转入账户不能相同。")
-
-    create_backup()
-
-    with connect() as connection:
+    with entry_submission("transfer", transfer) as submission:
+        if submission.replay is not None:
+            return submission.replay
+        connection = submission.connection
+        if transfer.source_account_id == transfer.destination_account_id:
+            raise HTTPException(status_code=422, detail="转出和转入账户不能相同。")
         source_account = get_active_account(connection, transfer.source_account_id, "转出账户")
         destination_account = get_active_account(
             connection,
@@ -3113,25 +3125,27 @@ def create_transfer(transfer: TransferCreate):
             connection, transfer.destination_account_id
         )
 
-    return {
-        "id": cursor.lastrowid,
-        "transaction_date": transfer.transaction_date.isoformat(),
-        "transaction_type": transaction_type,
-        "transaction_type_label": TRANSACTION_TYPE_LABELS[transaction_type],
-        "source_account_name": source_account["name"],
-        "source_currency_code": source_account["currency_code"],
-        "outflow_amount": format_minor(outflow_minor, source_account["decimal_places"]),
-        "source_account_balance": format_minor(
-            updated_source_account["balance_minor"], source_account["decimal_places"]
-        ),
-        "destination_account_name": destination_account["name"],
-        "destination_currency_code": destination_account["currency_code"],
-        "inflow_amount": format_minor(inflow_minor, destination_account["decimal_places"]),
-        "destination_account_balance": format_minor(
-            updated_destination_account["balance_minor"],
-            destination_account["decimal_places"],
-        ),
-    }
+        result = {
+            "id": cursor.lastrowid,
+            "transaction_date": transfer.transaction_date.isoformat(),
+            "transaction_type": transaction_type,
+            "transaction_type_label": TRANSACTION_TYPE_LABELS[transaction_type],
+            "source_account_name": source_account["name"],
+            "source_currency_code": source_account["currency_code"],
+            "outflow_amount": format_minor(outflow_minor, source_account["decimal_places"]),
+            "source_account_balance": format_minor(
+                updated_source_account["balance_minor"], source_account["decimal_places"]
+            ),
+            "destination_account_name": destination_account["name"],
+            "destination_currency_code": destination_account["currency_code"],
+            "inflow_amount": format_minor(inflow_minor, destination_account["decimal_places"]),
+            "destination_account_balance": format_minor(
+                updated_destination_account["balance_minor"],
+                destination_account["decimal_places"],
+            ),
+        }
+        submission.result = result
+        return result
 
 
 @app.get("/api/transactions")

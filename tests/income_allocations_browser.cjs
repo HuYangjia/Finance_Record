@@ -69,7 +69,7 @@ const base='http://127.0.0.1:18110';
     await page.waitForSelector('#income-allocation-editor[open]',{state:'hidden'});
     await page.locator('#income-source-dialog').getByRole('button',{name:'关闭分配收入',exact:true}).click();
     await text('#month-plans','700.00');
-    await page.locator(`#month-plans tr[data-system-id="${daily}"]`).getByRole('button').click();
+    await page.locator(`#month-plans tr[data-system-id="${daily}"]`).getByRole('button',{name:'安排存储 / 查看来源',exact:true}).click();
     await page.waitForSelector('#plan-editor[open]');
     assert.equal(await page.locator('.currency-total').getAttribute('readonly'),'');
     await page.click('#plan-history');await text('#budget-detail-content','收入分配：');

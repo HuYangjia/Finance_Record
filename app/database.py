@@ -86,6 +86,10 @@ def initialize_database() -> None:
     if DATABASE_PATH.exists():
         with open_connection(DATABASE_PATH) as existing:
             tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if 'transactions' in tables and 'entry_requests' not in tables:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                with open_connection(BACKUP_DIR / f"finance-pre-entry-requests-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                    existing.backup(destination)
             if 'transaction_offset_groups' in tables and 'category_allocation_mode' not in {
                     row[1] for row in existing.execute('PRAGMA table_info(transaction_offset_groups)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)

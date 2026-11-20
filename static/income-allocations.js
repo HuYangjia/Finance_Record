@@ -184,7 +184,20 @@ window.IncomeAllocations = (() => {
     host.insertBefore(section,host.querySelector('input[id$="-counterparty"]')?.closest('label')||host.querySelector('textarea')?.closest('label')||null);
     toggle.onchange=()=>{body.hidden=!toggle.checked;body.disabled=!toggle.checked;budgetSelect.disabled=toggle.checked;if(toggle.checked&&!parts.children.length)addPart();};
     function reset(){toggle.checked=false;body.hidden=true;body.disabled=true;parts.replaceChildren();budgetSelect.disabled=!getConfig();}
-    return {reset,payload(){
+    function restore(allocations=[]) {
+      reset();
+      if (!allocations.length) { budgetSelect.value=''; return; }
+      if (allocations.length===1 && allocations[0].amount==null) {
+        budgetSelect.value=String(allocations[0].budget_system_id);return;
+      }
+      const cfg=getConfig();if(!cfg)return;
+      toggle.checked=true;body.hidden=false;body.disabled=false;budgetSelect.disabled=true;
+      for (const item of allocations) {
+        const r=amountRow(cfg,getSourceCode(),item);parts.append(r.row);
+        if(item.amount==null){const remaining=r.row.querySelector('.allocation-remainder');remaining.checked=true;remaining.dispatchEvent(new Event('change'));}
+      }
+    }
+    return {reset,restore,payload(){
       if(!toggle.checked)return budgetSelect.value?[{budget_system_id:Number(budgetSelect.value),amount:null}]:[];
       return [...parts.children].map(row=>({budget_system_id:Number(row.querySelector('select').value),amount:rowAmount(row)}));
     }};
