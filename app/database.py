@@ -55,112 +55,130 @@ ACCOUNT_DIRECTORY_SEED = (
 )
 
 
+class ClosingConnection(sqlite3.Connection):
+    """Commit/rollback on context exit, then release the connection immediately."""
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
+def open_connection(path, **options) -> sqlite3.Connection:
+    return sqlite3.connect(path, factory=ClosingConnection, **options)
+
+
 def connect() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DATABASE_PATH, timeout=15)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
+    connection = open_connection(DATABASE_PATH, timeout=15)
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 
 def initialize_database() -> None:
     shared_term_backup = None
     if DATABASE_PATH.exists():
-        with sqlite3.connect(DATABASE_PATH) as existing:
+        with open_connection(DATABASE_PATH) as existing:
             tables = {row[0] for row in existing.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
             if 'transaction_offset_groups' in tables and 'category_allocation_mode' not in {
                     row[1] for row in existing.execute('PRAGMA table_info(transaction_offset_groups)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-offset-categories-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-offset-categories-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if 'transaction_offset_groups' in tables and 'budget_system_id' not in {
                     row[1] for row in existing.execute('PRAGMA table_info(transaction_offset_groups)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-offset-budget-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-offset-budget-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if ('term_deposit_accounts' in tables and 'app_settings' in tables
                     and not existing.execute("SELECT 1 FROM app_settings WHERE key='shared_term_deposit_version'").fetchone()):
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
                 shared_term_backup = BACKUP_DIR / f"finance-pre-shared-term-deposits-{datetime.now():%Y%m%d-%H%M%S-%f}.db"
-                with sqlite3.connect(shared_term_backup) as destination:
+                with open_connection(shared_term_backup) as destination:
                     existing.backup(destination)
             if 'accounts' in tables and 'term_deposits' not in tables:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-term-deposits-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-term-deposits-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if 'budget_plans' in tables and 'budget_legacy_reviews' not in tables:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-review-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-budget-review-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if 'budget_plans' in tables and 'budget_income_allocations' not in tables:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-income-allocations-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-income-allocations-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if 'accounts' in tables and 'directory_key' not in {
                     r[1] for r in existing.execute('PRAGMA table_info(accounts)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-account-directories-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-account-directories-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if 'daily_category_frequent_activity' in tables and 'recent_record_count' not in {
                     r[1] for r in existing.execute('PRAGMA table_info(daily_category_frequent_activity)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-category-ranking-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-category-ranking-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if 'accounts' in tables and 'transaction_entry_shortcuts' not in tables:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-entry-shortcuts-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-entry-shortcuts-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if 'budget_plans' in tables and 'budget_storage_transfers' not in tables:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-storage-balances-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-storage-balances-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if 'budget_plans' in tables and 'budget_plan_funding' not in tables:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-funding-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-budget-funding-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if 'budget_systems' in tables and 'execution_start_month' not in {r[1] for r in existing.execute('PRAGMA table_info(budget_systems)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-execution-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-budget-execution-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if 'budget_storage_methods' in tables and 'budget_system_id' in {r[1] for r in existing.execute('PRAGMA table_info(budget_storage_methods)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-shared-storage-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-shared-storage-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             storage_columns = ({r[1] for r in existing.execute('PRAGMA table_info(budget_storage_methods)')}
                                if 'budget_storage_methods' in tables else set())
             if 'is_placeholder' in storage_columns and existing.execute(
                     'SELECT 1 FROM budget_storage_methods WHERE is_placeholder=1').fetchone():
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-unallocated-storage-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-unallocated-storage-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if 'budget_systems' in tables and 'currency_code' not in {r[1] for r in existing.execute('PRAGMA table_info(budget_systems)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-currency-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-budget-currency-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if "transactions" in tables and "budget_system_id" not in {r[1] for r in existing.execute('PRAGMA table_info(transactions)')}:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-budget-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-budget-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             elif 'budget_systems' in tables and 'app_settings' in tables and not existing.execute("SELECT 1 FROM app_settings WHERE key='daily_expense_budget_system_id'").fetchone():
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-daily-budget-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-daily-budget-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if "transactions" in tables and "transaction_offset_groups" not in tables:
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
                 migration_backup = BACKUP_DIR / f"finance-pre-offset-{datetime.now():%Y%m%d-%H%M%S-%f}.db"
-                with sqlite3.connect(migration_backup) as destination:
+                with open_connection(migration_backup) as destination:
                     existing.backup(destination)
             if 'categories' in tables and existing.execute(
                     """SELECT 1 FROM categories
                        WHERE kind='expense' AND parent_id IS NULL AND name='日常购物'""").fetchone():
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-category-merge-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-category-merge-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
             if 'categories' in tables and existing.execute(
                     """SELECT 1 FROM categories
                        WHERE kind='expense' AND parent_id IS NULL AND name='个人护理'""").fetchone():
                 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(BACKUP_DIR / f"finance-pre-living-expense-category-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
+                with open_connection(BACKUP_DIR / f"finance-pre-living-expense-category-{datetime.now():%Y%m%d-%H%M%S-%f}.db") as destination:
                     existing.backup(destination)
     with connect() as connection:
         connection.execute("PRAGMA journal_mode = WAL")
@@ -469,12 +487,13 @@ def initialize_entry_shortcuts(connection: sqlite3.Connection) -> None:
 
 
 def create_backup() -> Path:
-    initialize_database()
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup_path = BACKUP_DIR / f"finance-{timestamp}.db"
 
-    with connect() as source, sqlite3.connect(backup_path) as destination:
+    # Startup owns initialization. Read-only mode must never create a missing ledger.
+    source_uri = DATABASE_PATH.resolve().as_uri() + "?mode=ro"
+    with open_connection(source_uri, uri=True, timeout=15) as source, open_connection(backup_path) as destination:
         source.backup(destination)
 
     return backup_path

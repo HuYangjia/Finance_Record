@@ -23,6 +23,8 @@ Excel 不再承担编辑职责，只用于查看、分享和归档。数据库�
 
 启动只等待数据库初始化及常用项快照，Excel 库在导出入口按需加载。当天汇率由 AnyIO 生命周期任务组后台同步，网络工作线程只取数；取消等待后不落库。自动同步写入前使用短事务复查，避免覆盖期间的人工更新，显式强制同步仍允许覆盖。实现与隔离性能验证见 [startup-performance.md](startup-performance.md)。
 
+数据库连接统一使用 `ClosingConnection`，上下文提交或回滚后明确关闭；迁移与备份连接同样释放。`create_backup` 仅从已存在账本生成只读源快照，初始化由启动或显式命令负责，不再在每次备份中重复检查迁移。规则与验证见 [write-reliability.md](write-reliability.md)。
+
 ## 数据对象
 
 ### currencies
