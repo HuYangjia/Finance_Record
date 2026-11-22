@@ -1,5 +1,7 @@
 # 启动性能与后台汇率同步
 
+2026-11-22：默认启动已改为 Windows 原生，Python 和依赖全部留在项目目录；旧 `start-wsl` 入口转向新 Windows 脚本。下文 WSL 实测保留为历史对照，不代表 Windows 当前耗时；Windows 方案及验证见 [windows-native-startup.md](windows-native-startup.md)。首次下载环境与日常启动分开衡量。
+
 ## 问题分析（2026-11-20）
 
 用户反馈启动需要 10 秒至几十秒。当前 Windows 脚本通过 WSL 启动 Uvicorn，没有重复安装依赖或启用热重载；主要阻塞在 Python 应用加载和应用生命周期内。

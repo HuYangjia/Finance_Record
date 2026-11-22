@@ -1,4 +1,6 @@
 .venv/
+.venv-win/
+.runtime/
 __pycache__/
 *.py[cod]
 # Local financial data and generated exports must never be committed.

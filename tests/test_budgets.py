@@ -1,5 +1,4 @@
 import json
-import sqlite3
 import tempfile
 import unittest
 from io import BytesIO
@@ -303,7 +302,7 @@ class BudgetTest(unittest.TestCase):
         database.initialize_database()
         backups=list(database.BACKUP_DIR.glob('finance-pre-budget-currency-*.db'))
         self.assertEqual(len(backups),1)
-        with sqlite3.connect(backups[0]) as c:
+        with database.open_connection(backups[0]) as c:
             self.assertNotIn('currency_code',[r[1] for r in c.execute('PRAGMA table_info(budget_systems)')])
         config=self.call('GET','/api/budget/config')
         daily=next(s for s in config['systems'] if s['id']==self.daily)
@@ -602,7 +601,7 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(self.execution()[1]['closing'],'100.00')
         backups=list(database.BACKUP_DIR.glob('finance-pre-budget-execution-*.db'))
         self.assertEqual(len(backups),1)
-        with sqlite3.connect(backups[0]) as c:
+        with database.open_connection(backups[0]) as c:
             self.assertNotIn('opening_minor',[r[1] for r in c.execute('PRAGMA table_info(budget_systems)')])
         database.initialize_database()
         self.assertEqual(len(list(database.BACKUP_DIR.glob('finance-pre-budget-execution-*.db'))),1)
@@ -672,7 +671,7 @@ class BudgetTest(unittest.TestCase):
         database.initialize_database()
         backups=list(database.BACKUP_DIR.glob('finance-pre-daily-budget-*.db'))
         self.assertEqual(len(backups),1)
-        with sqlite3.connect(backups[0]) as c:
+        with database.open_connection(backups[0]) as c:
             self.assertIsNone(c.execute("SELECT value FROM app_settings WHERE key='daily_expense_budget_system_id'").fetchone())
         database.initialize_database()
         self.assertEqual(len(list(database.BACKUP_DIR.glob('finance-pre-daily-budget-*.db'))),1)
@@ -729,7 +728,7 @@ class BudgetTest(unittest.TestCase):
         database.initialize_database()
         backups=list(database.BACKUP_DIR.glob('finance-pre-budget-*.db'))
         self.assertEqual(len(backups),1)
-        with sqlite3.connect(backups[0]) as c:
+        with database.open_connection(backups[0]) as c:
             self.assertNotIn('budget_system_id',[r[1] for r in c.execute('PRAGMA table_info(transactions)')])
         self.assertIsNone(self.call('GET',f"/api/transactions/{original['id']}")['budget_system_id'])
         database.initialize_database()

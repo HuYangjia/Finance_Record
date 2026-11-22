@@ -21,6 +21,8 @@ Excel 不再承担编辑职责，只用于查看、分享和归档。数据库�
 - 前端：本地浏览器页面，优先支持新增支出。
 - Excel：后端从数据库生成 `.xlsx` 文件，不从 Excel 回写数据库。
 
+默认由 Windows 原生启动：根目录 `启动记账.cmd` 调用 `scripts/start-windows.ps1`，通过项目内 uv 准备 CPython 3.12 与 `.venv-win`。所有环境、缓存、下载和临时文件限制在 `.runtime/windows/` 与 `.venv-win/`，不写全局 Python、PATH 或注册表；旧 WSL 启动脚本兼容转向新入口。正式 SQLite 文件和原备份路径保持一致；原 `.venv` 仅供独立的 WSL 开发。安装与验收见 [windows-native-startup.md](windows-native-startup.md)。
+
 启动只等待数据库初始化及常用项快照，Excel 库在导出入口按需加载。当天汇率由 AnyIO 生命周期任务组后台同步，网络工作线程只取数；取消等待后不落库。自动同步写入前使用短事务复查，避免覆盖期间的人工更新，显式强制同步仍允许覆盖。实现与隔离性能验证见 [startup-performance.md](startup-performance.md)。
 
 数据库连接统一使用 `ClosingConnection`，上下文提交或回滚后明确关闭；迁移与备份连接同样释放。`create_backup` 仅从已存在账本生成只读源快照，初始化由启动或显式命令负责，不再在每次备份中重复检查迁移。规则与验证见 [write-reliability.md](write-reliability.md)。

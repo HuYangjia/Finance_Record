@@ -1,4 +1,3 @@
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,7 +25,7 @@ class AccountDirectoryMigrationTest(unittest.TestCase):
         self.temporary_directory.cleanup()
 
     def create_legacy_database(self):
-        with sqlite3.connect(database.DATABASE_PATH) as connection:
+        with database.open_connection(database.DATABASE_PATH) as connection:
             connection.executescript(
                 """
                 PRAGMA foreign_keys=ON;

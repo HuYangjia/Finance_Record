@@ -1,5 +1,4 @@
 import json
-import sqlite3
 import unittest
 from decimal import Decimal
 from io import BytesIO
@@ -219,7 +218,7 @@ class StorageTest(unittest.TestCase):
             for table in ('budget_storage_defaults','budget_storage_expenses','budget_storage_transfers'):c.execute('DROP TABLE '+table)
         database.initialize_database();database.initialize_database()
         backups=list(database.BACKUP_DIR.glob('finance-pre-storage-balances-*.db'));self.assertEqual(len(backups),1)
-        with sqlite3.connect(backups[0]) as c:self.assertEqual(c.execute('SELECT total_minor FROM budget_plans').fetchone()[0],100000)
+        with database.open_connection(backups[0]) as c:self.assertEqual(c.execute('SELECT total_minor FROM budget_plans').fetchone()[0],100000)
         row=self.detail()['row'];self.assertIsNone(row['default_storage_method_id'])
         self.assertEqual((row['pending_count'],row['automatic_count'],row['automatic_cash']),(0,1,'20.00'))
         with database.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM budget_storage_expenses').fetchone()[0],0)

@@ -1,4 +1,3 @@
-import sqlite3
 import unittest
 from io import BytesIO
 from urllib.parse import urlencode
@@ -124,7 +123,7 @@ class FundingTest(unittest.TestCase):
         database.initialize_database()
         backups=list(database.BACKUP_DIR.glob('finance-pre-budget-funding-*.db'))
         self.assertEqual(len(backups),1)
-        with sqlite3.connect(backups[0]) as c:
+        with database.open_connection(backups[0]) as c:
             self.assertEqual(c.execute('SELECT total_minor FROM budget_plans').fetchone()[0],10000)
         self.assertIsNone(self.call('GET',f'/api/budget/plans/{self.daily}/2026-09/HKD')['funding'])
         database.initialize_database()

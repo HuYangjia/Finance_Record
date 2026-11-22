@@ -1,4 +1,3 @@
-import sqlite3
 import tempfile
 import unittest
 from datetime import date
@@ -281,7 +280,7 @@ class OffsetTest(unittest.TestCase):
             self.assertIn('offset_group',c.execute("SELECT sql FROM sqlite_master WHERE name='change_audit_logs'").fetchone()[0])
         backups=list(database.BACKUP_DIR.glob('finance-pre-offset-*.db'))
         self.assertEqual(len(backups),1)
-        with sqlite3.connect(backups[0]) as c:
+        with database.open_connection(backups[0]) as c:
             self.assertEqual(c.execute("SELECT count(*) FROM sqlite_master WHERE name='transaction_offset_groups'").fetchone()[0],0)
 
     def test_http_routes_candidate_selection_validation_and_static_pages(self):

@@ -1,7 +1,6 @@
 from datetime import date
 from io import BytesIO
 from unittest.mock import patch
-import sqlite3
 import unittest
 
 from openpyxl import load_workbook
@@ -242,7 +241,7 @@ class TermDepositTest(unittest.TestCase):
         database.initialize_database()
         backups=list(database.BACKUP_DIR.glob('finance-pre-shared-term-deposits-*.db'))
         self.assertEqual(len(backups),1)
-        with sqlite3.connect(backups[0]) as c:
+        with database.open_connection(backups[0]) as c:
             self.assertEqual(c.execute('SELECT term_account_id FROM term_deposit_accounts WHERE source_account_id=?',
                                       (self.other_account,)).fetchone()[0],separate)
         with database.connect() as c:

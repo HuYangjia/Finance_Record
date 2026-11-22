@@ -1,6 +1,5 @@
 """Mixed expense categories: precise shares with the same event and actual ledger."""
 from decimal import Decimal
-import sqlite3
 import unittest
 
 from openpyxl import load_workbook
@@ -195,7 +194,7 @@ class OffsetCategoryTest(unittest.TestCase):
         database.initialize_database()
         backups = list(database.BACKUP_DIR.glob('finance-pre-offset-categories-*.db'))
         self.assertEqual(len(backups), 1)
-        with sqlite3.connect(backups[0]) as c:
+        with database.open_connection(backups[0]) as c:
             self.assertNotIn('category_allocation_mode', {r[1] for r in c.execute('PRAGMA table_info(transaction_offset_groups)')})
         saved = self.call('GET', f"/api/offset-groups/{group['id']}")
         self.assertEqual(saved['category_allocation_mode'], 'anchor')

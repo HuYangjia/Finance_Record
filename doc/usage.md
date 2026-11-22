@@ -2,7 +2,11 @@
 
 ## 第一次启动
 
-项目已使用 SQLite 初始化空数据库：
+在 Windows 文件资源管理器中双击项目根目录的 `启动记账.cmd`。首次会联网准备项目内 Python 和依赖；之后直接启动。浏览器打开 `http://127.0.0.1:8000`，运行时保持窗口打开，Ctrl+C 或关闭窗口停止服务。
+
+Windows 原生启动不需要先安装 Python，也不唤醒 WSL。解释器、安装工具、依赖、缓存及临时文件全部位于本项目 `.runtime/windows/` 和 `.venv-win/`；不安装到系统／用户 Python，不修改全局 PATH 或 Python 注册表。仍使用 `data/finance.db` 和原备份目录。
+
+如需继续手工在 Linux / WSL 开发，原 `.venv` 独立保留：
 
 ```bash
 .venv/bin/python -m scripts.init_db
@@ -21,9 +25,17 @@
 
 ## Windows 一键启动
 
-在 Windows 文件资源管理器中双击 `scripts/start-wsl.cmd`。该脚本会通过默认 WSL 发行版启动服务，并自动将项目所在的 Windows 路径转换为 WSL 路径。
+推荐双击根目录的 `启动记账.cmd`，也可双击 `scripts/start-windows.cmd`。旧的 `scripts/start-wsl.cmd/.ps1` 已转向 Windows 原生启动，原快捷方式继续可用。
 
-浏览器打开 `http://127.0.0.1:8000`。服务运行期间请保持脚本窗口打开；要结束服务，在该窗口按 `Ctrl+C`，或直接关闭窗口。
+仅准备环境（不启动服务）可在项目目录运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-windows.ps1
+# 开发测试依赖同样只安装到本项目
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-windows.ps1 -Dev
+```
+
+正常环境重复运行不联网安装；依赖或准备脚本变化时自动更新。初次安装失败会保留错误提示，恢复网络后重试即可。移动整个项目后会在新目录重建 Windows 虚拟环境。端口占用时先停止旧服务，再启动；不要让 Windows 与 WSL 同时写同一个账本。需要移除运行环境时，先停止服务，再删除 `.venv-win/` 和 `.runtime/windows/`，保留 `data/`、`backups/`、`exports/`。详细规则见 [Windows 启动设计](windows-native-startup.md)。
 
 ## 记账保存结果确认
 
