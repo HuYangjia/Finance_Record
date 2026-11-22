@@ -20,5 +20,5 @@ if (!(Test-FinanceWindowsEnvironment $paths)) {
 Write-Host 'Starting the ledger with project-local Windows Python...'
 Write-Host "Open http://127.0.0.1:$Port in your browser."
 Write-Host 'Press Ctrl+C or close this window to stop the service.'
-& $paths.Python -s -m uvicorn app.main:app --host 127.0.0.1 --port $Port
+& $paths.Python -s -m uvicorn app.main:app --host 127.0.0.1 --port $Port --no-use-colors
 exit $LASTEXITCODE

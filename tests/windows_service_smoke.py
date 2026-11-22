@@ -26,7 +26,7 @@ def main():
         shutil.copytree(Path(sys.base_prefix), python_root/'cpython-test')
         interpreter = python_root/'cpython-test'/'python.exe'
         venv = fixture/'.venv-win'
-        environment = dict(os.environ, UV_PYTHON_INSTALL_DIR=str(python_root))
+        environment = dict(os.environ, UV_PYTHON_INSTALL_DIR=str(python_root), UVICORN_USE_COLORS='true')
         subprocess.run([str(runtime/'tools'/'uv.exe'),'venv','--python',str(interpreter),str(venv)],
                        env=environment, cwd=fixture, check=True)
         python = venv/'Scripts'/'python.exe'
@@ -100,9 +100,12 @@ with database.connect() as c:
                 assert row['closing']=='90.00',row
                 assert request('/api/budget/overview.xlsx?end_month='+month).startswith(b'PK')
                 assert b'<html' in request('/').lower()
+                logs=log_path.read_text(encoding='utf-8',errors='replace')
+                assert 'GET /api/health' in logs and '200 OK' in logs,logs
+                assert '\x1b[' not in logs, 'ANSI control codes leaked into Windows logs'
                 print(json.dumps(dict(ready_seconds=round(ready,3),health=True,html=True,
                     income_allocation=True,credit_card_expense_and_repayment=True,budget=True,excel=True,
-                    formal_ledger_modified=False)))
+                    plain_text_logs=True,formal_ledger_modified=False)))
             finally:
                 if child.poll() is None:
                     try:
