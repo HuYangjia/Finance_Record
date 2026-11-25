@@ -1053,8 +1053,7 @@ def recalculate_investment_valuation_transactions(connection, account_id: int) -
         generated_transaction_id = None
         if difference_minor != 0:
             note = (
-                f"投资估值损益：{account['name']} "
-                f"{valuation['valuation_date']} 总资产 "
+                "估值至 "
                 f"{format_minor(valuation['total_value_minor'], account['decimal_places'])} "
                 f"{account['currency_code']}"
             )
